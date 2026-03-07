@@ -1,18 +1,18 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173, // optional, but nice to be explicit
     proxy: {
+      // Any request to /api/* will be forwarded to lex-t.vercel.app
+      // This bypasses CORS issues when accessing via devtunnels.ms
       '/api': {
-        target: 'http://localhost:8080',
+        target: 'https://lex-t.vercel.app',
         changeOrigin: true,
-        secure: false,     // ok because target is http
-        // If your backend DIDN'T include '/api' in the route, you would rewrite:
-        // rewrite: (path) => path.replace(/^\/api/, '')
-        // but your backend *does* use '/api/case', so keep it as-is.
+        secure: true,
+        rewrite: (path) => path, // keep /api/case as-is
       },
     },
   },

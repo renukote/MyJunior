@@ -24,7 +24,9 @@ export const SCLookup: React.FC<SCLookupProps> = ({ onCaseFound }) => {
 
     try {
       const response = await axios.get<ApiCaseResponse>(
-        'https://lex-t.vercel.app/api/case',
+        '/api/case',
+        // Relative URL → Vite proxy forwards to https://lex-t.vercel.app
+        // Fixes CORS errors on VS Code dev tunnels (devtunnels.ms)
         {
           params: {
             diary_no: diaryNumber,

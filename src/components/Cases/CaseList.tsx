@@ -7,6 +7,7 @@ import { CaseTable } from './CaseTable';
 import { CaseKanban } from './CaseKanban';
 import { SCLookup } from './SCLookup';
 
+
 interface CaseListProps {
   cases: Case[];
   onCaseClick: (caseId: string) => void;
