@@ -1,0 +1,373 @@
+/**
+ * eCourts India API Service
+ * Provides access to eCourts India API for case history and court details
+ *
+ * Uses dynamic base URL:
+ * - Development (localhost): Uses Vite proxy at /ecourts-api
+ * - HTTPS (tunnel/production): Uses full HTTPS URL to bypass CORS
+ *
+ * ── CACHING LAYER ─────────────────────────────────────────────────────────────
+ * Every paid endpoint is wrapped with localStorage cache-first logic.
+ *
+ * Cache keys:  lx_ec_{type}_{cnr}
+ * TTLs:
+ *   earlierCourt  → 24 hours  (court of origin never changes)
+ *   lastOrders    →  6 hours  (may update after a hearing)
+ *   documents     → 24 hours  (filing list rarely changes)
+ *   officeReport  →  6 hours  (may update on hearing day)
+ *   orderDocument → forever   (immutable — court order text never changes)
+ *
+ * Cost impact per case:
+ *   Before: 4 paid API calls on every open, every time              = ₹2.00+
+ *   After:  4 calls on first open only, ₹0 on every open within TTL = ₹0
+ *
+ * Exported utilities:
+ *   isCached(type, cnr)    → check without fetching (used by UI to show badge)
+ *   clearCaseCache(cnr)    → call after manual refresh to bust stale cache
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+// Vite proxy at /ecourts-api → backend (localhost:3001) → webapi.ecourtsindia.com
+// The backend adds the secret Bearer token — no token needed in the browser.
+const BASE = '/ecourts-api'
+
+/**
+ * GET /api/partner/case/{cnr}
+ * Returns full case detail: parties, IAs, earlier court, orders, status.
+ * Cost: 1.5 credits per call.
+ */
+async function partnerGet(path: string): Promise<any> {
+  try {
+    const res = await fetch(`${BASE}${path}`)
+    if (!res.ok) {
+      console.warn(`[eCourts] HTTP ${res.status} for ${path}`)
+      return null
+    }
+    return await res.json()
+  } catch (err) {
+    console.error('[eCourts] fetch error:', err)
+    return null
+  }
+}
+
+// ── CACHE TTLs (milliseconds) ─────────────────────────────────────────────────
+const TTL = {
+  earlierCourt:  24 * 60 * 60 * 1000,  // 24 hours
+  lastOrders:     6 * 60 * 60 * 1000,  //  6 hours
+  documents:     24 * 60 * 60 * 1000,  // 24 hours
+  officeReport:   6 * 60 * 60 * 1000,  //  6 hours
+  orderDocument:  0,                    // forever (immutable)
+}
+
+// ── CACHE HELPERS ─────────────────────────────────────────────────────────────
+
+/**
+ * Read from localStorage. Returns data if fresh, null if missing/expired.
+ * ttlMs = 0 means cache forever.
+ */
+function getCached<T>(key: string, ttlMs: number): T | null {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const { data, ts } = JSON.parse(raw) as { data: T; ts: number }
+    if (ttlMs === 0 || Date.now() - ts < ttlMs) return data
+    localStorage.removeItem(key)
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Write to localStorage. Silent on quota errors. */
+function setCache(key: string, data: any): void {
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }))
+  } catch {
+    // quota exceeded — skip silently
+  }
+}
+
+/**
+ * Force-clear all cached data for a CNR.
+ * Call this after the user manually refreshes a case so stale cache is busted.
+ */
+export function clearCaseCache(cnr: string): void {
+  const types = ['earlierCourt', 'lastOrders', 'documents', 'officeReport']
+  types.forEach(type => {
+    try { localStorage.removeItem(`lx_ec_${type}_${cnr}`) } catch { /* ignore */ }
+  })
+}
+
+/**
+ * Returns true if a valid cached value exists for this type + CNR.
+ * Used by UI to show a "CACHED — ₹0" badge without triggering a fetch.
+ */
+export function isCached(type: keyof typeof TTL, cnr: string): boolean {
+  return getCached(`lx_ec_${type}_${cnr}`, TTL[type]) !== null
+}
+
+// ── INTERFACES ────────────────────────────────────────────────────────────────
+
+export interface EarlierCourtData {
+  cnr?: string
+  courtName?: string
+  state?: string
+  caseNumber?: string
+  filingDate?: string
+  judge?: string
+  [key: string]: any
+}
+
+// ── FETCH FULL CASE DETAIL (1.5 credits, cached 6h) ──────────────────────────
+// Single call returns everything: status, parties, IAs, earlier court, orders.
+// All other fetch functions below derive from this cached result.
+//
+// In-flight dedup: if multiple sections call this simultaneously for the same
+// CNR (e.g. on "Fetch All"), they all share ONE promise → ONE API call → ₹1.5
+
+const _inFlight = new Map<string, Promise<any>>()
+
+async function fetchCaseDetail(cnr: string): Promise<any | null> {
+  const cacheKey = `lx_ec_caseDetail_${cnr}`
+  const cached = getCached<any>(cacheKey, 6 * 60 * 60 * 1000)
+  if (cached) {
+    console.log(`[eCourts] caseDetail cache HIT for ${cnr} — ₹0`)
+    return cached
+  }
+
+  // Return existing in-flight promise if one is already running for this CNR
+  if (_inFlight.has(cnr)) {
+    console.log(`[eCourts] caseDetail dedup for ${cnr} — ₹0`)
+    return _inFlight.get(cnr)!
+  }
+
+  const promise = partnerGet(`/api/partner/case/${cnr}`)
+    .then(data => {
+      if (data) setCache(cacheKey, data)
+      _inFlight.delete(cnr)
+      return data
+    })
+    .catch(err => {
+      _inFlight.delete(cnr)
+      throw err
+    })
+
+  _inFlight.set(cnr, promise)
+  return promise
+}
+
+// ── FETCH CASE BY CNR ─────────────────────────────────────────────────────────
+export const fetchCaseByCNR = async (
+  cnr: string
+): Promise<any | null> => {
+  const detail = await fetchCaseDetail(cnr)
+  return detail?.data?.courtCaseData ?? null
+}
+
+// ── FETCH EARLIER COURT ───────────────────────────────────────────────────────
+// Derived from caseDetail — no extra credit cost.
+// Returns null if empty so callers fall through to SC website fallback.
+
+export const fetchEarlierCourt = async (
+  cnr: string
+): Promise<EarlierCourtData | null> => {
+  const detail = await fetchCaseDetail(cnr)
+  const list = detail?.data?.courtCaseData?.earlierCourtDetails
+  return Array.isArray(list) && list.length > 0 ? list : null
+}
+
+// ── DATE HELPERS ──────────────────────────────────────────────────────────────
+
+/**
+ * Convert various date formats to ISO format (YYYY-MM-DD)
+ * Supports: YYYY-MM-DD, DD-MM-YYYY, YYYY-MM-DD with time, "13 Feb 2026"
+ */
+function toISODate(date: string): string | null {
+  if (!date) return null
+
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date
+
+  // DD-MM-YYYY
+  const dmy = date.match(/^(\d{2})-(\d{2})-(\d{4})$/)
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`
+
+  // YYYY-MM-DD with time
+  const withTime = date.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (withTime) return withTime[1]
+
+  // "13 Feb 2026" format
+  const months: Record<string, string> = {
+    Jan: '01', Feb: '02', Mar: '03', Apr: '04',
+    May: '05', Jun: '06', Jul: '07', Aug: '08',
+    Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+  }
+  const readable = date.match(/(\d{1,2})\s+(\w{3})\s+(\d{4})/)
+  if (readable) {
+    return `${readable[3]}-${months[readable[2]] || '01'}-${readable[1].padStart(2, '0')}`
+  }
+
+  return null
+}
+
+// ── URL GENERATORS ────────────────────────────────────────────────────────────
+
+/**
+ * Generate Supreme Court office report URL.
+ * With processId (future): direct HTML link on api.sci.gov.in
+ * Without processId (current): SC website search page
+ */
+export const generateOfficeReportUrl = (
+  diaryNo: string,
+  diaryYear: string,
+  listedDate?: string,
+  processId?: string
+): string => {
+  if (!diaryNo || !diaryYear) {
+    return 'https://www.sci.gov.in/office-report-case-no/'
+  }
+  if (processId && listedDate) {
+    const isoDate = toISODate(listedDate)
+    if (isoDate) {
+      return `https://api.sci.gov.in/officereport/${diaryYear}/${diaryNo}/${diaryNo}_${diaryYear}_${isoDate}_${processId}.html`
+    }
+  }
+  return 'https://www.sci.gov.in/office-report-case-no/'
+}
+
+/**
+ * Generate Supreme Court website URL for latest orders.
+ */
+export const generateLastOrderUrl = (diaryNo: string, diaryYear: string): string => {
+  if (!diaryNo || !diaryYear) return '#'
+  return `https://suprcourt.nic.in/supremecourtweb/?p=3289&diary=${diaryNo.trim()}&year=${diaryYear.trim()}&type=orders`
+}
+
+// ── FETCH OFFICE REPORT ───────────────────────────────────────────────────────
+// SC office report HTML comes from SC website, not eCourts API.
+// Return null so callers fall through to SC WordPress AJAX fallback.
+
+export const fetchOfficeReport = async (
+  _cnr: string
+): Promise<any | null> => {
+  return null
+}
+
+// ── FETCH LAST ORDERS ─────────────────────────────────────────────────────────
+// Returns null if empty so callers fall through to SC website fallback.
+
+export const fetchLastOrders = async (
+  cnr: string
+): Promise<any | null> => {
+  const detail = await fetchCaseDetail(cnr)
+  const list = detail?.data?.courtCaseData?.judgmentOrders
+  return Array.isArray(list) && list.length > 0 ? list : null
+}
+
+// ── FETCH CASE DOCUMENTS ──────────────────────────────────────────────────────
+// Returns null if empty so ApplicationsSection falls through to SC website.
+
+export const fetchCaseDocuments = async (
+  cnr: string
+): Promise<any | null> => {
+  const detail = await fetchCaseDetail(cnr)
+  const list = detail?.data?.courtCaseData?.filedDocuments
+  return Array.isArray(list) && list.length > 0 ? list : null
+}
+
+// ── FETCH ORDER DOCUMENT ──────────────────────────────────────────────────────
+// Cached forever — court order text is immutable once published.
+// Layer 1: in-memory Map  (fastest, same session)
+// Layer 2: localStorage   (persists across page reloads, no TTL)
+// Layer 3: API call       (₹1.25, only on first ever access per device)
+
+const orderDocMemCache = new Map<string, string>()
+
+export const fetchOrderDocument = async (
+  cnr: string,
+  filename: string
+): Promise<string | null> => {
+  const cacheKey = `lx_ec_orderDocument_${cnr}_${filename}`
+
+  if (orderDocMemCache.has(cacheKey)) return orderDocMemCache.get(cacheKey)!
+
+  const lsCached = getCached<string>(cacheKey, TTL.orderDocument)
+  if (lsCached) {
+    orderDocMemCache.set(cacheKey, lsCached)
+    console.log(`[eCourts] orderDocument cache HIT for ${filename} — ₹0`)
+    return lsCached
+  }
+
+  const data = await partnerGet(`/api/partner/case/order-document/${cnr}/${filename}`)
+  if (!data) return null
+
+  let text: string | null = null
+  if (typeof data === 'string') text = data.trim()
+  else if (typeof data?.text === 'string') text = data.text.trim()
+
+  if (text) {
+    orderDocMemCache.set(cacheKey, text)
+    setCache(cacheKey, text)
+  }
+  return text
+}
+
+// ── CHECK ECOURTS STATUS ──────────────────────────────────────────────────────
+// OLD: GET /case/cnr/SCIN010174142020  → burned ₹0.50 per status ping
+// NEW: HEAD /health                    → no body, no billing cost
+
+export const checkECourtsStatus = async (): Promise<'online' | 'offline'> => {
+  try {
+    const res = await fetch(`${BASE}/api/partner/health`, { method: 'HEAD' })
+    return res.ok ? 'online' : 'offline'
+  } catch {
+    return 'offline'
+  }
+}
+
+// ── STUB EXPORTS (referenced by CourtSync.tsx and SearchCaseForm.tsx) ─────────
+// These are placeholders for future MCP / eCourts Search API endpoints.
+// Once the API plan is upgraded, replace the fetch URLs and remove the stub guards.
+
+/**
+ * Discover available MCP tools from the eCourts API.
+ * Currently returns an empty list — called on app mount in CourtSync.tsx
+ * so the console log is informational only.
+ */
+export const discoverMCPTools = async (): Promise<string[]> => {
+  // Not applicable for REST partner API — return empty
+  return []
+}
+
+/**
+ * Search cases by AOR name using eCourts API.
+ * Used by SearchCaseForm's AOR search tab.
+ * Returns null until the /search endpoint is confirmed active on the plan.
+ */
+export const searchCases = async (
+  params: { aor_name?: string; from_year?: string; to_year?: string }
+): Promise<any | null> => {
+  const qs = new URLSearchParams(params as Record<string, string>).toString()
+  return partnerGet(`/api/partner/search?${qs}`)
+}
+
+/**
+ * Fetch full case details by diary number + year via eCourts API.
+ * This is the eCourts-side equivalent of the SC /api/case proxy call.
+ * Cached for 6 hours (same TTL as officeReport — may update after a hearing).
+ */
+export const fetchCaseByDiary = async (
+  diaryNo: string,
+  diaryYear: string
+): Promise<any | null> => {
+  const cacheKey = `lx_ec_caseByDiary_${diaryNo}_${diaryYear}`
+  const cached = getCached<any>(cacheKey, 6 * 60 * 60 * 1000)
+  if (cached) {
+    console.log(`[eCourts] caseByDiary cache HIT for ${diaryNo}/${diaryYear} — ₹0`)
+    return cached
+  }
+
+  const data = await partnerGet(`/api/partner/case/diary/${diaryNo}/${diaryYear}`)
+  if (data) setCache(cacheKey, data)
+    return data
+}
