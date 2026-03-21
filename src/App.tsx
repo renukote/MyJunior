@@ -66,7 +66,7 @@ class ErrorBoundary extends React.Component<
 }
 
 // ── SCHEMA MIGRATION ──────────────────────────────────────────────────────────
-const SCHEMA_VERSION = '2'
+const SCHEMA_VERSION = '4'
 
 function migrateSchema() {
   try {
@@ -75,17 +75,51 @@ function migrateSchema() {
       const raw = localStorage.getItem('lextgress_cases')
       if (raw) {
         const cases = JSON.parse(raw)
-        const migrated = cases.map((c: any) => ({
-          ...c,
-          judgmentOrders: c.judgmentOrders || [],
-          earlierCourtDetails: c.earlierCourtDetails || [],
-          listingDates: c.listingDates || [],
-          interlocutoryApplications: c.interlocutoryApplications || [],
-          notices: c.notices || [],
-          decisionDate: c.decisionDate || null,
-          mcpData: c.mcpData || null,
-        }))
-        localStorage.setItem('lextgress_cases', JSON.stringify(migrated))
+        const migrated = cases.map((c: any) => {
+          // Backfill diaryNumber from CNR for cases added via CNR lookup (SCIN01XXXXXXYYYY)
+          let diaryNumber = c.diaryNumber;
+          let diaryYear = c.diaryYear;
+          if (!diaryNumber && c.cnrNumber) {
+            const m = c.cnrNumber.match(/^SCIN01(\d{6})(\d{4})$/i);
+            if (m) {
+              diaryNumber = String(parseInt(m[1], 10));
+              diaryYear = diaryYear || m[2];
+            }
+          }
+          return {
+            ...c,
+            diaryNumber: diaryNumber || c.diaryNumber || '',
+            diaryYear: diaryYear || c.diaryYear || '',
+            judgmentOrders: c.judgmentOrders || [],
+            earlierCourtDetails: c.earlierCourtDetails || [],
+            listingDates: c.listingDates || [],
+            interlocutoryApplications: c.interlocutoryApplications || [],
+            notices: c.notices || [],
+            decisionDate: c.decisionDate || null,
+            mcpData: c.mcpData || null,
+          };
+        })
+        // Deduplicate by CNR (keep the entry with more user data — listings + notes)
+        const seen = new Map<string, any>()
+        const deduped = migrated.filter((c: any) => {
+          const key = c.cnrNumber || `${c.diaryNumber}-${c.diaryYear}`
+          if (!key || key === '-') return true // no key to deduplicate on
+          if (seen.has(key)) {
+            const prev = seen.get(key)
+            const prevScore = (prev.listings?.length || 0) + (prev.notes?.length || 0) + (prev.tasks?.length || 0)
+            const curScore  = (c.listings?.length  || 0) + (c.notes?.length  || 0) + (c.tasks?.length  || 0)
+            if (curScore > prevScore) seen.set(key, c) // swap to richer entry
+            return false // drop the duplicate
+          }
+          seen.set(key, c)
+          return true
+        })
+        // Replace with deduped list (seen map holds the richer entry for each key)
+        const final = deduped.map((c: any) => {
+          const key = c.cnrNumber || `${c.diaryNumber}-${c.diaryYear}`
+          return seen.get(key) || c
+        })
+        localStorage.setItem('lextgress_cases', JSON.stringify(final))
       }
       localStorage.setItem('lextgress_schema_version', SCHEMA_VERSION)
     }

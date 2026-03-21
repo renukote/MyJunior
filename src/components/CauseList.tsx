@@ -5,11 +5,16 @@ export default function CauseList({ cases, T, onSelectCase }: { cases: any[], T:
     const [printDateFilter, setPrintDateFilter] = useState("All");
 
     const upcoming = useMemo(() => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
         const hearings: any[] = [];
         cases.forEach(c => {
             if (c.archived || c.status === "Disposed") return;
             const dateStr = c.nextHearingDate || c.likelyListedOn;
-            if (dateStr) {
+            if (!dateStr) return;
+            // Skip past dates — cause list is for upcoming hearings only
+            if (new Date(dateStr) < today) return;
+            {
                 // Find matching listing for this date to extract specific item/bench details
                 const listing = c.listings?.find((l: any) => l.date === dateStr) || c.listings?.[0] || {};
 
@@ -17,10 +22,15 @@ export default function CauseList({ cases, T, onSelectCase }: { cases: any[], T:
                     id: c.id,
                     date: dateStr,
                     title: formatCaseTitle(c).toUpperCase(),
-                    category: c.caseNumber?.toUpperCase() || `${c.caseType} ${c.shortCaseNumber}`,
+                    category: c.caseNumber?.toUpperCase()
+                        || ((c.caseType && c.caseType !== 'UNKNOWN') ? `${c.caseType} ${c.shortCaseNumber || ''}`.trim() : '')
+                        || (c.diaryNumber ? `DIARY NO. ${c.diaryNumber}/${c.diaryYear}` : ''),
                     court: listing.court || c.courtNumber?.replace(/\D/g, "") || "1",
                     item: listing.item || "-",
-                    bench: listing.bench ? `HON'BLE ${listing.bench.toUpperCase()}` : (c.lastListedJudges?.length > 0 ? `HON'BLE ${c.lastListedJudges.join(" AND HON'BLE ").toUpperCase()}` : "TBD"),
+                    bench: (() => {
+                        const b = Array.isArray(listing.bench) ? listing.bench.join(', ') : (listing.bench || '');
+                        return b ? `HON'BLE ${b.toUpperCase()}` : (c.lastListedJudges?.length > 0 ? `HON'BLE ${c.lastListedJudges.join(" AND HON'BLE ").toUpperCase()}` : "TBD");
+                    })(),
                     listingType: (listing.type || c.stage || c.status || "REGULAR").toUpperCase(),
                     caseData: c
                 });
@@ -194,7 +204,7 @@ export default function CauseList({ cases, T, onSelectCase }: { cases: any[], T:
                                                             ))}
                                                         </td>
                                                         <td style={{ verticalAlign: "top", lineHeight: 1.5 }}>
-                                                            {h.category} TITLED<br />
+                                                            {h.category ? `${h.category} TITLED` : 'TITLED'}<br />
                                                             {h.title}
                                                             {h.caseData.connectedCases && h.caseData.connectedCases.length > 0 && (
                                                                 <div style={{ fontWeight: "bold", marginTop: 4 }}>AND CONNECTED MATTER</div>

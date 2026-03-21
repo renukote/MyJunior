@@ -10,6 +10,7 @@
  *   /health         → status check
  */
 
+import 'dotenv/config'
 import express from 'express'
 
 const app = express()
@@ -44,6 +45,55 @@ function setCache(key, data, ttlMs) {
 function cacheStats() {
   return `${memCache.size} entries cached`
 }
+
+// ── ECOURTS PDF PROXY ─────────────────────────────────────────────────────────
+// Separate route for binary PDF responses (order documents).
+// Unlike /ecourts-api/*, this pipes the raw buffer with the correct content-type
+// so an <iframe src="/ecourts-pdf/..."> can render the PDF directly in-browser.
+// Order PDFs are immutable — cached forever in memory.
+
+const pdfMemCache = new Map() // key → Buffer
+
+app.get('/ecourts-pdf/*splat', async (req, res) => {
+  if (!ECOURTS_TOKEN) {
+    return res.status(500).json({ error: 'Server misconfigured: missing eCourts token' })
+  }
+
+  const stripPath = req.path.replace(/^\/ecourts-pdf/, '')
+  const cacheKey  = `pdf_${stripPath}`
+
+  const cachedBuf = pdfMemCache.get(cacheKey)
+  if (cachedBuf) {
+    console.log(`[pdf cache HIT] ${stripPath}`)
+    res.set('Content-Type', 'application/pdf')
+    res.set('Content-Disposition', 'inline')
+    return res.send(cachedBuf)
+  }
+
+  const targetUrl = `${ECOURTS_BASE}${stripPath}`
+  console.log(`[eCourts PDF →] ${targetUrl}`)
+
+  try {
+    const response = await fetch(targetUrl, {
+      headers: { 'Authorization': `Bearer ${ECOURTS_TOKEN}` },
+    })
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `eCourts returned ${response.status}` })
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/pdf'
+    const buf = Buffer.from(await response.arrayBuffer())
+
+    pdfMemCache.set(cacheKey, buf) // immutable — cache forever
+    res.set('Content-Type', contentType)
+    res.set('Content-Disposition', 'inline')
+    res.send(buf)
+  } catch (err) {
+    console.error('[eCourts PDF] proxy error:', err.message)
+    res.status(502).json({ error: 'eCourts PDF proxy error', message: err.message })
+  }
+})
 
 // ── ECOURTS PROXY ─────────────────────────────────────────────────────────────
 // Vite forwards /ecourts-api/* here. We strip the prefix and forward to

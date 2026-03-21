@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from "react";
 import { formatCaseTitle } from "../utils/caseTitle";
-import { generateOfficeReportUrl, generateLastOrderUrl } from "../services/eCourtsService";
+import { generateOfficeReportUrl, generateLastOrderUrl, fetchCaseFullByCNR } from "../services/eCourtsService";
+import { transformMCPToCase } from "../utils/apiTransform";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPE DEFINITIONS
@@ -292,22 +293,17 @@ function transformApiToCase(apiResponse: { data: CaseResult; query: { diary_no: 
   } as unknown as CaseResult;
 }
 
-async function fetchCaseFromAPI(diaryNo: string, diaryYear: string): Promise<{ ok: boolean; data: CaseResult; errorMsg?: string }> {
-  const url = `/api/case?diary_no=${encodeURIComponent(diaryNo)}&diary_year=${encodeURIComponent(diaryYear)}&language=en`;
+async function fetchCaseFromAPI(cnr: string): Promise<{ ok: boolean; data: CaseResult; errorMsg?: string }> {
+  if (!cnr) return { ok: false, data: {} as CaseResult, errorMsg: "No CNR number — eCourts API requires CNR (e.g. SCIN010001232024)" };
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-    if (!res.ok) {
-      return { ok: false, data: {} as CaseResult, errorMsg: `Server returned ${res.status}` };
+    const data = await fetchCaseFullByCNR(cnr.trim().toUpperCase());
+    if (!data) {
+      return { ok: false, data: {} as CaseResult, errorMsg: "Case not found in eCourts API" };
     }
-    const json = await res.json();
-    if (!json.ok) {
-      return { ok: false, data: {} as CaseResult, errorMsg: json.message || "API returned no match" };
-    }
-    const transformed = transformApiToCase({ data: json.data, query: { diary_no: diaryNo, diary_year: diaryYear } });
+    const transformed = transformMCPToCase(data, cnr) as CaseResult;
     return { ok: true, data: transformed };
   } catch (e: any) {
-    const msg = e?.name === "TimeoutError" ? "Request timed out — check network" : (e?.message || "Network error");
-    return { ok: false, data: {} as CaseResult, errorMsg: msg };
+    return { ok: false, data: {} as CaseResult, errorMsg: e?.message || "Network error" };
   }
 }
 
@@ -471,8 +467,8 @@ export default function DocumentScanner({ onCaseFound, savedCases = [] }: { onCa
       return;
     }
 
-    if (fields.diaryNo && fields.diaryYear) {
-      const res = await fetchCaseFromAPI(fields.diaryNo, fields.diaryYear);
+    if (fields.cnr) {
+      const res = await fetchCaseFromAPI(fields.cnr);
       if (res.ok) {
         setCaseResult(res.data); setSource("api"); setStep(5);
         if (onCaseFound) onCaseFound(res.data);
@@ -480,7 +476,7 @@ export default function DocumentScanner({ onCaseFound, savedCases = [] }: { onCa
       }
       setApiError(res.errorMsg || "API lookup failed");
     } else {
-      setApiError("No diary number found in scan — cannot query SC API");
+      setApiError("No CNR number found in scan — eCourts API requires CNR (e.g. SCIN010001232024)");
     }
 
     setCaseResult(null); setSource("extracted"); setStep(5);
@@ -1005,7 +1001,7 @@ export default function DocumentScanner({ onCaseFound, savedCases = [] }: { onCa
                   setStep(4);
                   const local2 = matchAgainstCases({ ...(fields || {}), diaryNo: no, diaryYear: yr }, savedCases);
                   if (local2) { setCaseResult(local2); setSource("local"); setStep(5); if (onCaseFound) onCaseFound(local2); return; }
-                  const res = await fetchCaseFromAPI(no, yr);
+                  const res = await fetchCaseFromAPI(no);
                   if (res.ok) { setCaseResult(res.data); setSource("api"); setStep(5); if (onCaseFound) onCaseFound(res.data); }
                   else { setApiError(res.errorMsg || "API lookup failed"); setCaseResult(null); setSource("extracted"); setStep(5); }
                 }}

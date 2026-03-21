@@ -237,7 +237,7 @@ export interface ParsedListing {
 export function parseListingData(caseData: any): ParsedListing {
   const lastListedOn = caseData.lastListedOn || "";
   const stage = caseData.stage || "";
-  const statusBadge = caseData.caseStatusBadge || caseData.status || "PENDING";
+  const statusBadge = (caseData.caseStatusBadge || caseData.status || "PENDING").toString().toUpperCase();
   
   // Parse date and judges from lastListedOn
   let lastListedDate = "";

@@ -164,16 +164,31 @@ export function CaseCard({ c, selected, onClick, searchTerm }: { c: any; selecte
                     <div style={{ display: "flex", gap: 14, marginLeft: 15, flexWrap: "wrap", alignItems: "center" }}>
                         <span style={{ color: T.textMuted, fontSize: 13 }}>⚖ {c.courtNumber}</span>
                         <span style={{ color: T.textMuted, fontSize: 13 }}>🕐 {c.timeOfSitting}</span>
-                        <span style={{ color: T.textMuted, fontSize: 13 }}>📂 {hi(String(c.diaryNumber))}/{hi(String(c.diaryYear))}</span>
+                        {c.cnrNumber
+                            ? <span style={{ color: T.textMuted, fontSize: 13 }}>📂 {hi(c.cnrNumber)}</span>
+                            : c.diaryNumber
+                                ? <span style={{ color: T.textMuted, fontSize: 13 }}>📂 {hi(String(c.diaryNumber))}/{hi(String(c.diaryYear))}</span>
+                                : null
+                        }
                         {show && <span style={{ color: hearingColor(days), fontSize: 13, fontWeight: urgent ? 700 : 500 }}>📅 {hearingLabel(days)}</span>}
                     </div>
                     <div style={{ display: "flex", gap: 14, marginLeft: 15, marginTop: 5, flexWrap: "wrap", alignItems: "center" }}>
                         <span style={{ color: T.textMuted, fontSize: 13 }}>
                             🔁 Last Listed: {safeDate(c.lastListedOn)}
                         </span>
-                        <span style={{ color: c.likelyListedOn || c.nextHearingDate ? "#C9A84C" : T.textMuted, fontSize: 13, fontWeight: c.likelyListedOn || c.nextHearingDate ? 600 : 400 }}>
-                            📅 Likely Listed: {safeDate(c.likelyListedOn || c.nextHearingDate)}
-                        </span>
+                        {(() => {
+                            const likelyDate = c.likelyListedOn || c.nextHearingDate;
+                            const today = new Date(new Date().setHours(0,0,0,0));
+                            const isFuture = likelyDate && new Date(likelyDate) >= today;
+                            if (c.status === "Disposed") {
+                                return <span style={{ color: T.textMuted, fontSize: 13 }}>📅 Likely Listed: No Date</span>;
+                            }
+                            return (
+                                <span style={{ color: isFuture ? "#C9A84C" : T.textMuted, fontSize: 13, fontWeight: isFuture ? 600 : 400 }}>
+                                    📅 Likely Listed: {isFuture ? safeDate(likelyDate) : "—"}
+                                </span>
+                            );
+                        })()}
                         {c.lastOrdersUrl && c.lastOrdersUrl !== "#" && (
                             <a href={c.lastOrdersUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
                                 style={{ color: "#2A7BD4", fontSize: 13, fontWeight: 600, textDecoration: "none" }}>📄 Last Order</a>
@@ -218,7 +233,12 @@ export function GalleryCard({ c, selected, onClick }: { c: any; selected: boolea
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: "auto" }}>
                 <span style={{ fontSize: 11, color: T.textMuted }}>⚖ {(c.courtNumber || "—").replace("Court No.", "Ct.")}</span>
-                <span style={{ fontSize: 11, color: T.textMuted }}>· 📂 {c.diaryNumber}/{c.diaryYear}</span>
+                {c.cnrNumber
+                    ? <span style={{ fontSize: 11, color: T.textMuted }}>· 📂 {c.cnrNumber}</span>
+                    : c.diaryNumber
+                        ? <span style={{ fontSize: 11, color: T.textMuted }}>· 📂 {c.diaryNumber}/{c.diaryYear}</span>
+                        : null
+                }
             </div>
             {c.labels?.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>{c.labels.slice(0, 3).map((l: string) => <span key={l} style={{ fontSize: 10, fontWeight: 700, color: LABEL_COLORS[l] || "#8A94B0", background: `${LABEL_COLORS[l] || "#8A94B0"}18`, padding: "2px 7px", borderRadius: 10, border: `1px solid ${LABEL_COLORS[l] || "#8A94B0"}30` }}>{l}</span>)}</div>}
         </div>
@@ -256,10 +276,15 @@ export function TableView({ cases, selected, onSelect, searchTerm }: { cases: an
                                 <td style={{ padding: "10px 14px", color: T.text, fontWeight: 600, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hi(formatCaseTitleShort(c, 100))}</td>
                                 <td style={{ padding: "10px 14px", color: T.textSub, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hi(formatParty(c.respondent))}</td>
                                 <td style={{ padding: "10px 14px", color: T.textMuted, whiteSpace: "nowrap", fontSize: 12 }}>{(c.courtNumber || "—").replace("Court No.", "Ct.")}</td>
-                                <td style={{ padding: "10px 14px", color: T.textMuted, whiteSpace: "nowrap", fontSize: 12 }}>{c.diaryNumber}/{c.diaryYear}</td>
+                                <td style={{ padding: "10px 14px", color: T.textMuted, whiteSpace: "nowrap", fontSize: 12 }}>{c.cnrNumber ? c.cnrNumber : c.diaryNumber ? `${c.diaryNumber}/${c.diaryYear}` : '—'}</td>
                                 <td style={{ padding: "10px 14px" }}><span style={{ background: s.bg, color: s.text, fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 20, border: `1px solid ${s.border}`, letterSpacing: 0.5 }}>{c.status.toUpperCase()}</span></td>
                                 <td style={{ padding: "10px 14px", color: T.textMuted, whiteSpace: "nowrap", fontSize: 12 }}>{c.lastListedOn ? safeDate(c.lastListedOn) : "—"}</td>
-                                <td style={{ padding: "10px 14px", color: c.likelyListedOn ? "#C9A84C" : T.textMuted, fontWeight: c.likelyListedOn ? 700 : 400, whiteSpace: "nowrap", fontSize: 12 }}>{c.likelyListedOn ? safeDate(c.likelyListedOn) : "—"}</td>
+                                <td style={{ padding: "10px 14px", whiteSpace: "nowrap", fontSize: 12 }}>{(() => {
+                                    const d = c.likelyListedOn;
+                                    const isFuture = d && new Date(d) >= new Date(new Date().setHours(0,0,0,0));
+                                    if (c.status === 'Disposed') return <span style={{ color: T.textMuted }}>No Date</span>;
+                                    return isFuture ? <span style={{ color: "#C9A84C", fontWeight: 700 }}>{safeDate(d)}</span> : <span style={{ color: T.textMuted }}>—</span>;
+                                })()}</td>
                                 <td style={{ padding: "10px 14px" }}><div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>{c.labels?.slice(0, 2).map((l: string) => <span key={l} style={{ fontSize: 10, fontWeight: 700, color: LABEL_COLORS[l] || "#8A94B0", background: `${LABEL_COLORS[l] || "#8A94B0"}18`, padding: "1px 6px", borderRadius: 10 }}>{l}</span>)}{c.labels?.length > 2 && <span style={{ fontSize: 10, color: T.textMuted }}>+{c.labels.length - 2}</span>}</div></td>
                             </tr>
                         );

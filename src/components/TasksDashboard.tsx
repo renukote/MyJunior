@@ -373,7 +373,7 @@ export default function TasksDashboard({ cases, T, onUpdateCase, onUpdateMultipl
 
     // ── Bulk AI: Generate Tasks for ALL Cases (both sides) ────────────────────
     const handleBulkGenerateAll = async () => {
-        const activeCases = cases.filter((c: any) => !c.archived);
+        const activeCases = cases.filter((c: any) => !c.archived && c.status !== 'Disposed');
         if (activeCases.length === 0 || isBulkGenerating) return;
 
         setIsBulkGenerating(true);

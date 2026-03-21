@@ -3,7 +3,8 @@ import { AppContext } from "./AppContext";
 import { LIGHT_THEME, DARK_THEME } from "./themes";
 import { ALL_LABELS, LABEL_COLORS, matchesSearch, sortCases, fmtDate, fmtDT, getDaysUntil, hearingLabel, Badge, DR, SectionHead } from "./caseHelpers";
 import { formatCaseTitle, formatCaseTitleShort, formatParty } from "./utils/caseTitle";
-import { generateOfficeReportUrl, generateLastOrderUrl, discoverMCPTools, clearCaseCache } from "./services/eCourtsService";
+import { generateOfficeReportUrl, generateLastOrderUrl, discoverMCPTools, clearCaseCache, fetchCaseFullByCNR } from "./services/eCourtsService";
+import { transformMCPToCase } from "./utils/apiTransform";
 import SearchCaseForm, { transformApiToCase } from "./components/SearchCaseForm";
 import axios from "axios";
 import { loadCases, saveCasesArray, saveSearchHistory, checkStorageHealth, exportAllData, StorageHealth } from "./services/localStorageService";
@@ -58,6 +59,22 @@ import { SearchInfo, BellPanel, ConfirmDialog, CaseModal } from "./components/Mo
                     changed = true;
                 }
             }
+
+            // Normalize status: old eCourts cases may have stored lowercase ('active', 'pending', 'disposed')
+            // or wrong values ('closed', 'defective') that don't match STATUS_STYLES keys
+            const statusNormMap: Record<string, string> = {
+                'active': 'Pending', 'ACTIVE': 'Pending',
+                'pending': 'Pending', 'PENDING': 'Pending',
+                'disposed': 'Disposed', 'DISPOSED': 'Disposed',
+                'closed': 'Disposed', 'CLOSED': 'Disposed',
+                'defective': 'Pending', 'DEFECTIVE': 'Pending',
+                'fresh': 'Fresh', 'FRESH': 'Fresh',
+            };
+            if (c.status && statusNormMap[c.status] && statusNormMap[c.status] !== c.status) {
+                c.status = statusNormMap[c.status];
+                changed = true;
+            }
+
             return c;
         });
 
@@ -328,7 +345,14 @@ export default function CourtSync() {
             saveSearchHistory(caseData.diaryNumber, caseData.diaryYear);
         }
         setCases(prev => {
-            const exists = prev.findIndex(c => c.diaryNumber === caseData.diaryNumber && c.diaryYear === caseData.diaryYear);
+            // Prefer CNR match (most reliable unique key); fall back to diary no + year
+            const exists = prev.findIndex(c => {
+                if (caseData.cnrNumber && c.cnrNumber)
+                    return c.cnrNumber === caseData.cnrNumber;
+                if (caseData.diaryNumber && caseData.diaryYear && c.diaryNumber && c.diaryYear)
+                    return c.diaryNumber === caseData.diaryNumber && c.diaryYear === caseData.diaryYear;
+                return false;
+            });
             if (exists !== -1) {
                 const existing = prev[exists];
                 const mergedListings = [...(existing.listings || [])];
@@ -365,53 +389,46 @@ export default function CourtSync() {
     }
 
     async function handleRefreshCase(c: any) {
-        if (!c.diaryNumber || !c.diaryYear) {
-            alert("Missing Diary Number or Year");
+        if (!c.cnrNumber) {
+            alert("No CNR number available for this case — cannot refresh via eCourts API.");
             return;
         }
-        // Clear cache to force fresh fetch
         clearCaseCache(c.cnrNumber);
         setRefreshingId(c.id);
         try {
-            const response = await axios.get("/api/case", {
-                params: { diary_no: c.diaryNumber, diary_year: c.diaryYear, language: "en" },
-                timeout: 15000,
-            });
-            if (response.data?.ok) {
-                const refreshed = transformApiToCase(response.data);
+            const data = await fetchCaseFullByCNR(c.cnrNumber, true);
+            if (data) {
+                const refreshed = transformMCPToCase(data, c.cnrNumber);
                 handleCaseFound(refreshed);
             } else {
-                alert("Case not found or SC site busy. Try again later.");
+                alert("Case not found or eCourts API busy. Try again later.");
             }
         } catch (err) {
             console.error("Error refreshing case", err);
-            alert("Error refreshing case from Supreme Court database.");
+            alert("Error refreshing case from eCourts API.");
         } finally {
             setRefreshingId(null);
         }
     }
 
     async function handleCasePreview(caseInfo: any) {
-        const dNo = caseInfo.diaryNo || caseInfo.diaryNumber;
-        const dYear = caseInfo.diaryYear || caseInfo.year;
-
-        // Show a loading indicator if possible, or just use a toast
+        const cnr = caseInfo.cnrNumber || caseInfo.cnr;
+        if (!cnr) {
+            alert("No CNR number available for preview.");
+            return;
+        }
         setSuccessToast("Fetching case details for preview...");
-
         try {
-            const response = await axios.get("/api/case", {
-                params: { diary_no: dNo, diary_year: dYear, language: "en" },
-                timeout: 15000,
-            });
-            if (response.data?.ok) {
-                const fullCaseData = transformApiToCase(response.data);
+            const data = await fetchCaseFullByCNR(cnr);
+            if (data) {
+                const fullCaseData = transformMCPToCase(data, cnr);
                 setPreviewCase(fullCaseData);
             } else {
                 alert("Case details not found.");
             }
         } catch (err) {
             console.error("Error fetching preview", err);
-            alert("Error fetching case details from Supreme Court database.");
+            alert("Error fetching case details from eCourts API.");
         }
     }
 
@@ -735,7 +752,9 @@ export default function CourtSync() {
                         </div>
                         <div style={{ flex: 1, overflow: "auto", padding: "14px 14px 80px" }}>
                             <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${T.borderSoft}` }}>
-                                <div style={{ display: "inline-block", background: T.accentBg, border: `1px solid ${T.accentBorder}`, borderRadius: 6, padding: "2px 9px", color: T.accentDark, fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{selected.caseType} {selected.shortCaseNumber}</div>
+                                {(selected.caseType && selected.caseType !== 'UNKNOWN') || selected.shortCaseNumber ? (
+                                    <div style={{ display: "inline-block", background: T.accentBg, border: `1px solid ${T.accentBorder}`, borderRadius: 6, padding: "2px 9px", color: T.accentDark, fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{selected.caseType} {selected.shortCaseNumber}</div>
+                                ) : null}
                                 <div style={{ fontSize: 18, fontWeight: 800, color: T.text, lineHeight: 1.3, marginBottom: 4 }}>{formatCaseTitle(selected)}</div>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
                                     <span style={{ background: getS(selected.status).bg, color: getS(selected.status).text, fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 20, border: `1px solid ${getS(selected.status).border}` }}>{selected.status.toUpperCase()}</span>
@@ -1052,7 +1071,9 @@ export default function CourtSync() {
                                                 <div style={{ fontSize: 22, fontWeight: 800, color: T.text, lineHeight: 1.3, marginBottom: 4, letterSpacing: -0.3 }}>
                                                     {formatCaseTitle(selected)}
                                                 </div>
-                                                <div style={{ display: "inline-block", background: T.accentBg, border: `1px solid ${T.accentBorder}`, borderRadius: 6, padding: "2px 9px", color: T.accentDark, fontSize: 13, fontFamily: "Georgia,serif", fontWeight: 700 }}>{selected.caseType} {selected.shortCaseNumber}</div>
+                                                {(selected.caseType && selected.caseType !== 'UNKNOWN') || selected.shortCaseNumber ? (
+                                                    <div style={{ display: "inline-block", background: T.accentBg, border: `1px solid ${T.accentBorder}`, borderRadius: 6, padding: "2px 9px", color: T.accentDark, fontSize: 13, fontFamily: "Georgia,serif", fontWeight: 700 }}>{selected.caseType} {selected.shortCaseNumber}</div>
+                                                ) : null}
                                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
                                                     <span style={{ background: getS(selected.status).bg, color: getS(selected.status).text, fontSize: 13, fontWeight: 700, padding: "4px 12px", borderRadius: 20, border: `1px solid ${getS(selected.status).border}`, letterSpacing: 0.5 }}>{selected.status.toUpperCase()}</span>
                                                     {selected.archived && <span style={{ background: "#F3F4F7", color: T.textMuted, fontSize: 13, fontWeight: 700, padding: "4px 12px", borderRadius: 20, border: `1px solid ${T.border}` }}>ARCHIVED</span>}
@@ -1092,7 +1113,7 @@ export default function CourtSync() {
                                                     <DR icon="👥" label="Respondent(s)">{formatParty(selected.respondent)}</DR>
                                                     <DR icon="#" label="D.No">{selected.diaryNumber} / {selected.diaryYear}</DR>
                                                     <DR icon="🔖" label="CNR Number">{selected.cnrNumber || "—"}</DR>
-                                                    <DR icon="📋" label="Case Number">{selected.caseNumber}</DR>
+                                                    {selected.caseNumber && <DR icon="📋" label="Case Number">{selected.caseNumber}</DR>}
                                                     <DR icon="⚖" label="Court Name">{selected.courtName}</DR>
                                                     <DR icon="🏛" label="Court Number">{selected.courtNumber}</DR>
                                                     <DR icon="🕐" label="Time of Sitting">{selected.timeOfSitting}</DR>

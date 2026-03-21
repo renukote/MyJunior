@@ -40,7 +40,12 @@ async function partnerGet(path: string): Promise<any> {
   try {
     const res = await fetch(`${BASE}${path}`)
     if (!res.ok) {
-      console.warn(`[eCourts] HTTP ${res.status} for ${path}`)
+      let errMsg = `HTTP ${res.status}`
+      try {
+        const errBody = await res.json()
+        errMsg = errBody?.message || errBody?.error || errMsg
+      } catch { /* body not JSON — use status code only */ }
+      console.warn(`[eCourts] ${errMsg} for ${path}`)
       return null
     }
     return await res.json()
@@ -92,7 +97,7 @@ function setCache(key: string, data: any): void {
  * Call this after the user manually refreshes a case so stale cache is busted.
  */
 export function clearCaseCache(cnr: string): void {
-  const types = ['earlierCourt', 'lastOrders', 'documents', 'officeReport']
+  const types = ['caseDetail', 'earlierCourt', 'lastOrders', 'documents', 'officeReport']
   types.forEach(type => {
     try { localStorage.removeItem(`lx_ec_${type}_${cnr}`) } catch { /* ignore */ }
   })
@@ -298,7 +303,7 @@ export const fetchOrderDocument = async (
     return lsCached
   }
 
-  const data = await partnerGet(`/api/partner/case/order-document/${cnr}/${filename}`)
+  const data = await partnerGet(`/api/partner/case/${cnr}/order/${filename}`)
   if (!data) return null
 
   let text: string | null = null
@@ -313,12 +318,11 @@ export const fetchOrderDocument = async (
 }
 
 // ── CHECK ECOURTS STATUS ──────────────────────────────────────────────────────
-// OLD: GET /case/cnr/SCIN010174142020  → burned ₹0.50 per status ping
-// NEW: HEAD /health                    → no body, no billing cost
+// Uses the free public court-structure endpoint — no billing, no auth required.
 
 export const checkECourtsStatus = async (): Promise<'online' | 'offline'> => {
   try {
-    const res = await fetch(`${BASE}/api/partner/health`, { method: 'HEAD' })
+    const res = await fetch(`${BASE}/api/CauseList/court-structure/states`)
     return res.ok ? 'online' : 'offline'
   } catch {
     return 'offline'
@@ -340,34 +344,54 @@ export const discoverMCPTools = async (): Promise<string[]> => {
 }
 
 /**
- * Search cases by AOR name using eCourts API.
- * Used by SearchCaseForm's AOR search tab.
- * Returns null until the /search endpoint is confirmed active on the plan.
+ * Search cases using eCourts partner search API (₹0.20/call).
+ * Supports advocate, petitioner, respondent, litigant name search.
+ * Use state='SC' to filter Supreme Court cases.
  */
 export const searchCases = async (
-  params: { aor_name?: string; from_year?: string; to_year?: string }
+  params: {
+    advocates?: string
+    petitioners?: string
+    respondents?: string
+    litigants?: string
+    filingDateFrom?: string
+    filingDateTo?: string
+    state?: string
+    pageSize?: number
+    page?: number
+  }
 ): Promise<any | null> => {
-  const qs = new URLSearchParams(params as Record<string, string>).toString()
+  const queryParams: Record<string, string> = {}
+  if (params.advocates)      queryParams.advocates      = params.advocates
+  if (params.petitioners)    queryParams.petitioners    = params.petitioners
+  if (params.respondents)    queryParams.respondents    = params.respondents
+  if (params.litigants)      queryParams.litigants      = params.litigants
+  if (params.filingDateFrom) queryParams.filingDateFrom = params.filingDateFrom
+  if (params.filingDateTo)   queryParams.filingDateTo   = params.filingDateTo
+  if (params.state)          queryParams.state          = params.state
+  queryParams.pageSize = String(params.pageSize || 20)
+  if (params.page)           queryParams.page           = String(params.page)
+  const qs = new URLSearchParams(queryParams).toString()
   return partnerGet(`/api/partner/search?${qs}`)
 }
 
 /**
- * Fetch full case details by diary number + year via eCourts API.
- * This is the eCourts-side equivalent of the SC /api/case proxy call.
- * Cached for 6 hours (same TTL as officeReport — may update after a hearing).
+ * Fetch full raw API response for a case by CNR.
+ * Returns the complete { data: { courtCaseData: {...} }, meta: {...} } object.
+ * Used by search form and refresh — pass result to transformMCPToCase().
+ * Cost: ₹0.50, cached 6 hours.
  */
-export const fetchCaseByDiary = async (
-  diaryNo: string,
-  diaryYear: string
-): Promise<any | null> => {
-  const cacheKey = `lx_ec_caseByDiary_${diaryNo}_${diaryYear}`
-  const cached = getCached<any>(cacheKey, 6 * 60 * 60 * 1000)
-  if (cached) {
-    console.log(`[eCourts] caseByDiary cache HIT for ${diaryNo}/${diaryYear} — ₹0`)
-    return cached
-  }
-
-  const data = await partnerGet(`/api/partner/case/diary/${diaryNo}/${diaryYear}`)
-  if (data) setCache(cacheKey, data)
+export const fetchCaseFullByCNR = async (cnr: string, forceRefresh = false): Promise<any | null> => {
+  if (forceRefresh) {
+    // Bust backend in-memory cache by adding a timestamp query param — changes the cache key
+    // Also clear frontend localStorage cache for this CNR
+    try { localStorage.removeItem(`lx_ec_caseDetail_${cnr}`) } catch { /* ignore */ }
+    const res = await fetch(`/ecourts-api/api/partner/case/${cnr}?_t=${Date.now()}`)
+    if (!res.ok) return null
+    const data = await res.json()
+    // Store fresh response back into frontend cache
+    if (data) setCache(`lx_ec_caseDetail_${cnr}`, data)
     return data
+  }
+  return await fetchCaseDetail(cnr)
 }

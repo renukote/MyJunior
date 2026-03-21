@@ -5,10 +5,11 @@ import DocumentScanner from "./DocumentScanner";
 import { generateLegalTasks } from "../caseLogic";
 import { loadSearchHistory, saveSearchHistory, SearchHistoryEntry } from "../services/localStorageService";
 import { formatCaseTitle } from "../utils/caseTitle";
-import { 
-  generateOfficeReportUrl, 
+import {
+  generateOfficeReportUrl,
   generateLastOrderUrl,
-  fetchCaseByDiary
+  fetchCaseFullByCNR,
+  searchCases,
 } from "../services/eCourtsService";
 import { transformMCPToCase } from "../utils/apiTransform";
 
@@ -429,16 +430,27 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
         setError(null);
         setAorResults([]);
         setCurrentPage(1);
+        setShowAorComingSoon(false);
 
-        // TODO: Replace with real API when SC eCourt API /api/cases is enabled:
-        // const response = await axios.get("/api/cases", { params: { aor_name: aorName, from_year: fromYear, to_year: toYear }, timeout: 20000 });
-        // if (response.data?.ok) { setAorResults(response.data.cases || []); }
-
-        // Shows a brief loading animation before showing Coming Soon state
-        setTimeout(() => {
+        try {
+            const result = await searchCases({
+                advocates: aorName.trim(),
+                filingDateFrom: `${fromYear}-01-01`,
+                filingDateTo: `${toYear}-12-31`,
+                state: 'SC',
+                pageSize: 50,
+            });
+            const results = result?.data?.results || [];
+            if (results.length === 0) {
+                setError("No cases found. Try a different name or date range.");
+            } else {
+                setAorResults(results);
+            }
+        } catch (err) {
+            setError("Error searching cases. Please try again.");
+        } finally {
             setIsSearchingAOR(false);
-            setShowAorComingSoon(true);
-        }, 800);
+        }
     };
 
 
@@ -475,23 +487,16 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
     const [addingCaseId, setAddingCaseId] = useState<string | null>(null);
 
     const handleAddToDashboard = async (caseInfo: any) => {
-        setAddingCaseId(caseInfo.id || `${caseInfo.diaryNumber}-${caseInfo.diaryYear}`);
+        const cnr = caseInfo.cnr || caseInfo.cnrNumber;
+        setAddingCaseId(cnr || caseInfo.id || 'loading');
         try {
-            const response = await axios.get("/api/case", {
-                params: {
-                    diary_no: caseInfo.diaryNo || caseInfo.diaryNumber,
-                    diary_year: caseInfo.diaryYear || caseInfo.year,
-                    language: "en"
-                },
-                timeout: 15000,
-            });
-
-            if (response.data?.ok) {
-                const fullCaseData = transformApiToCase(response.data);
+            if (!cnr) { alert("No CNR number available for this case."); return; }
+            const data = await fetchCaseFullByCNR(cnr);
+            if (data) {
+                const fullCaseData = transformMCPToCase(data, cnr);
                 onCaseFound(fullCaseData);
-                // The onCaseFound handler in CourtSync already triggers office report fetch and AI tasks
             } else {
-                alert("Could not fetch complete case details. Please try again.");
+                alert("Could not fetch case details. Please try again.");
             }
         } catch (err) {
             alert("Error adding case to dashboard.");
@@ -521,9 +526,22 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
     };
 
     const handleSearch = async () => {
-        const trimmed = diaryNumber.trim();
-        if (!trimmed) {
-            setError("Please enter a diary number.");
+        const input = diaryNumber.trim();
+        if (!input) {
+            setError("Please enter a diary number or CNR number.");
+            return;
+        }
+
+        // Auto-detect input type:
+        // - Numeric (e.g. 542) → diary number → derive CNR: SCIN01 + padded to 6 digits + year
+        // - Starts with SCIN (e.g. SCIN010005422026) → use directly as CNR
+        let cnr: string;
+        if (/^\d+$/.test(input)) {
+            cnr = `SCIN01${input.padStart(6, '0')}${year}`;
+        } else if (/^SCIN/i.test(input)) {
+            cnr = input.toUpperCase();
+        } else {
+            setError("Enter a diary number (e.g., 542) or a CNR number (e.g., SCIN010005422026).");
             return;
         }
 
@@ -533,34 +551,17 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
         try {
             let caseData: any = null;
 
-            // ── Path A: Try eCourts API (fetchCaseByDiary) ─────────────────────
-            // Has its own 6-hour localStorage cache — free on repeat calls.
-            const courtCaseData = await fetchCaseByDiary(trimmed, year);
-            if (courtCaseData) {
-                caseData = transformMCPToCase(courtCaseData, trimmed, year);
+            // ── Fetch by CNR (derived from diary number or entered directly) ────
+            const rawData = await fetchCaseFullByCNR(cnr);
+            if (rawData) {
+                caseData = transformMCPToCase(rawData, cnr);
             }
 
-            // ── Path B: SC /api/case proxy with 6-hour cache ────────────────────
-            // Check cache first to avoid burning credits on repeat searches.
             if (!caseData) {
-                let apiData = getSCCache(trimmed, year);
-                if (!apiData) {
-                    const response = await axios.get("/api/case", {
-                        params: { diary_no: trimmed, diary_year: year, language: "en" },
-                        timeout: 15000,
-                    });
-                    apiData = response.data;
-                    if (apiData?.ok) {
-                        setSCCache(trimmed, year, apiData); // cache on success
-                    }
-                }
-                if (!apiData?.ok) {
-                    const msg = "Case not found. Please check the diary number and year.";
-                    setError(msg);
-                    onError?.(msg);
-                    return;
-                }
-                caseData = transformApiToCase(apiData);
+                const msg = "Case not found. Please check the diary number and year, or the CNR number.";
+                setError(msg);
+                onError?.(msg);
+                return;
             }
 
             if (!caseData) {
@@ -573,7 +574,7 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
             onCaseFound(caseData);
 
             // Part 6 — persist diary search history
-            saveSearchHistory(trimmed, year);
+            saveSearchHistory(input, year);
             setDiarySearchHistory(loadSearchHistory());
 
             setDiaryNumber("");
@@ -633,7 +634,7 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
                         transition: "all 0.2s"
                     }}
                 >
-                    🔍 Search by Diary Number
+                    🔍 Search by Diary No.
                 </button>
                 <button
                     onClick={() => { setActiveTab("aor"); setError(null); }}
@@ -670,10 +671,10 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
                             </div>
                             <div>
                                 <div style={{ fontWeight: 800, fontSize: 18, color: T.text, letterSpacing: -0.3, marginBottom: 4 }}>
-                                    Supreme Court Case Lookup
+                                    Search by Diary Number
                                 </div>
                                 <div style={{ fontSize: 14, color: T.textMuted, lineHeight: 1.5 }}>
-                                    Enter the diary number and year to fetch case details from the Supreme Court database.
+                                    Enter a diary number (e.g., 542) with the year, or paste a full CNR number (e.g., SCIN010005422026).
                                 </div>
                             </div>
                         </div>
@@ -685,8 +686,8 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
                                 value={diaryNumber}
                                 onChange={(e) => { setDiaryNumber(e.target.value); setError(null); }}
                                 onKeyDown={handleKeyDown}
-                                placeholder="Diary Number (e.g., 1234)"
-                                aria-label="Diary Number"
+                                placeholder="Diary No. (e.g., 542) or CNR (e.g., SCIN010005422026)"
+                                aria-label="Diary Number or CNR Number"
                                 style={{
                                     flex: "2",
                                     minWidth: 200,
@@ -701,17 +702,12 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
                                 }}
                             />
 
-                            <input
-                                type="text"
+                            <select
                                 value={year}
-                                onChange={(e) => { setYear(e.target.value); setError(null); }}
-                                onKeyDown={handleKeyDown}
-                                placeholder="2026"
-                                aria-label="Diary Year"
+                                onChange={(e) => setYear(e.target.value)}
+                                aria-label="Year"
                                 style={{
-                                    flex: "1",
-                                    minWidth: 100,
-                                    padding: "12px 14px",
+                                    padding: "12px 10px",
                                     borderRadius: 8,
                                     border: `1px solid ${T.border}`,
                                     fontSize: 15,
@@ -719,8 +715,14 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
                                     background: T.bg,
                                     outline: "none",
                                     fontFamily: "inherit",
+                                    minWidth: 90,
+                                    cursor: "pointer",
                                 }}
-                            />
+                            >
+                                {YEARS.map(y => (
+                                    <option key={y} value={y}>{y}</option>
+                                ))}
+                            </select>
 
                             <button
                                 onClick={handleSearch}

@@ -5,7 +5,7 @@ import { useApp } from "../AppContext";
 import { fmtDate, fmtDT, SectionCard, SectionIconBox, parseListingData, formatDMY, formatDateForDisplay } from "../caseHelpers";
 import { getNotes, createNote, updateNote, deleteNote } from '../services/notesService';
 import { getCurrentUser } from '../services/authService';
-import { fetchOfficeReport, fetchLastOrders, fetchEarlierCourt, fetchCaseDocuments, fetchCaseByDiary, generateOfficeReportUrl, isCached } from '../services/eCourtsService';
+import { fetchOfficeReport, fetchLastOrders, fetchEarlierCourt, fetchCaseDocuments, generateOfficeReportUrl, isCached } from '../services/eCourtsService';
 import { Note } from '../types/notes';
 import axios from "axios";
 import {
@@ -437,7 +437,13 @@ function buildSCEvents(c: any): any[] {
         id: "__filing", type: "filing",
         date: c.dateOfFiling,
         event: "Case filed in Supreme Court",
-        sub: `Diary No. ${c.diaryNumber}/${c.diaryYear} · Registered`,
+        sub: c.cnrNumber
+            ? `CNR: ${c.cnrNumber}`
+            : c.diaryNumber
+                ? `Diary No. ${c.diaryNumber}/${c.diaryYear} · Registered`
+                : c.caseNumber
+                    ? `Case: ${c.caseNumber}`
+                    : `Year: ${c.diaryYear || '—'}`,
         source: "SC Registry", auto: true,
     });
 
@@ -464,14 +470,19 @@ function buildSCEvents(c: any): any[] {
         source: "SC Order", auto: true,
     });
 
-    // 4. Tentatively listed on (upcoming)
-    if (likelyListedOn) evs.push({
-        id: "__upcoming", type: "upcoming",
-        date: likelyListedOn,
-        event: "Tentatively listed on",
-        sub: "Computer generated · Subject to revision",
-        source: "SC Website", auto: true, upcoming: true,
-    });
+    // 4. Tentatively listed on (upcoming only if date is in the future)
+    if (likelyListedOn) {
+        const _today = new Date(); _today.setHours(0, 0, 0, 0);
+        const _ld = new Date(likelyListedOn); _ld.setHours(0, 0, 0, 0);
+        const _isUpcoming = _ld >= _today;
+        evs.push({
+            id: "__upcoming", type: _isUpcoming ? "upcoming" : "listing",
+            date: likelyListedOn,
+            event: _isUpcoming ? "Tentatively listed on" : "Case listed in Supreme Court",
+            sub: "Computer generated · Subject to revision",
+            source: "SC Website", auto: true, upcoming: _isUpcoming,
+        });
+    }
 
     // 5. Last fetched timestamp
     if (c.lastCheckedAt) evs.push({
@@ -593,10 +604,10 @@ export function EarlierCourtSection({ selected, fetchTrigger = 0 }: { selected: 
         loadingRef.current = false; // reset immediately (avoids stale closure blocking next load)
         setLoading(false);
 
-        // Auto-load if case has diary number (SC website fetch, free) or eCourts cache
+        // Auto-load if case has diary number, eCourts cache, or any CNR (eCourts fetch)
         const hasDiary = !!(diaryNo && diaryYear);
         const hasCached = selected?.cnrNumber ? isCached('earlierCourt', selected.cnrNumber) : false;
-        if (hasDiary || hasCached) {
+        if (hasDiary || hasCached || !!selected?.cnrNumber) {
             loadEarlierCourt();
         }
     }, [selected?.id]);
@@ -988,9 +999,9 @@ export function SCDetailSection({ selected, fetchTrigger = 0 }: { selected: any;
             } catch { /* fall through to error */ }
         }
 
-        setFetchError(selected?.cnrNumber
-            ? 'Report not available yet. It may not have been published for this listing date.'
-            : 'CNR number required to fetch via eCourts API. Open on SC website instead.');
+        setFetchError(diaryNo && diaryYear
+            ? 'Office report not published yet for this case.'
+            : 'SC Office Report requires the diary number. Cases added via CNR only do not have diary numbers on record. Please search by diary number on the SC website.');
         setFetched(true);
         setLoading(false);
     };
@@ -1008,17 +1019,9 @@ export function SCDetailSection({ selected, fetchTrigger = 0 }: { selected: any;
         setFetchError(null);
         setShowReportModal(false);
 
-        if (selected?.cnrNumber && isCached('officeReport', selected.cnrNumber)) {
-            (async () => {
-                setLoading(true);
-                const report = await fetchWithTimeout(() => fetchOfficeReport(selected.cnrNumber), 12000);
-                if (report) {
-                    setReportContent(extractReportText(report));
-                    setReportMeta({ date: report?.lastOrderDate || report?.date || rawListedDate || undefined });
-                }
-                setFetched(true);
-                setLoading(false);
-            })();
+        // Auto-load: if diary available (free SC website fetch) or CNR available (try eCourts)
+        if ((diaryNo && diaryYear) || selected?.cnrNumber) {
+            doFetch(false);
         }
     }, [selected?.id]);
 
@@ -2910,37 +2913,7 @@ export function ApplicationsSection({ selected, onUpdate, fetchTrigger = 0 }: { 
             return;
         }
 
-        // ── Try 1: SC proxy /api/case (same source as initial case search — no API key needed) ──
-        if (diaryNo && diaryYear) {
-            try {
-                const resp = await axios.get("/api/case", {
-                    params: { diary_no: diaryNo, diary_year: diaryYear, language: "en" },
-                    timeout: 12000,
-                });
-                const payload = resp.data;
-                console.log('[IA] SC proxy response:', payload);
-                // The IA table may be at payload.data.interlocutoryApplications or anywhere in payload
-                const searchTargets = [payload?.data, payload?.case, payload];
-                for (const target of searchTargets) {
-                    if (!target) continue;
-                    const raw = findIAArray(target);
-                    if (raw && raw.length > 0) {
-                        setIaApiData(raw.map(normalizeIAItem));
-                        setIaDebugMsg(`✓ ${raw.length} IA(s) loaded from SC`);
-                        setIaFetched(true); setIaLoading(false); return;
-                    }
-                }
-                // No IA array found — log keys to help debug
-                const topKeys = payload?.data ? Object.keys(payload.data).slice(0, 10) : Object.keys(payload || {}).slice(0, 10);
-                setIaDebugMsg(`SC returned data but no IA table found. Data keys: ${topKeys.join(', ')}`);
-                console.log('[IA] All data keys:', payload?.data ? Object.keys(payload.data) : Object.keys(payload || {}));
-            } catch (err: any) {
-                console.log('[IA] SC proxy error:', err?.message);
-                setIaDebugMsg(`SC proxy error: ${err?.message || 'unknown'}`);
-            }
-        }
-
-        // ── Try 2: eCourts API by CNR (if configured and CNR available) ──
+        // ── Try 1: eCourts API by CNR (if configured and CNR available) ──
         if (selected?.cnrNumber) {
             const docs = await fetchWithTimeout(() => fetchCaseDocuments(selected.cnrNumber), 8000);
             if (docs) {
@@ -2953,20 +2926,7 @@ export function ApplicationsSection({ selected, onUpdate, fetchTrigger = 0 }: { 
             }
         }
 
-        // ── Try 3: eCourts API by diary number ──
-        if (diaryNo && diaryYear) {
-            const diaryData = await fetchWithTimeout(() => fetchCaseByDiary(diaryNo, diaryYear), 8000);
-            if (diaryData) {
-                const raw3 = findIAArray(diaryData);
-                if (raw3 && raw3.length > 0) {
-                    setIaApiData(raw3.map(normalizeIAItem));
-                    setIaDebugMsg(`✓ ${raw3.length} IA(s) loaded via eCourts diary`);
-                    setIaFetched(true); setIaLoading(false); return;
-                }
-            }
-        }
-
-        if (!diaryNo && !selected?.cnrNumber) {
+        if (!selected?.cnrNumber) {
             setIaDebugMsg("No diary number or CNR available on this case.");
         }
 
@@ -2974,7 +2934,7 @@ export function ApplicationsSection({ selected, onUpdate, fetchTrigger = 0 }: { 
         setIaLoading(false);
     };
 
-    // Reset on case change
+    // Reset on case change + auto-load when CNR available
     useEffect(() => {
         setIaApiData(null);
         setIaFetched(false);
@@ -2983,6 +2943,11 @@ export function ApplicationsSection({ selected, onUpdate, fetchTrigger = 0 }: { 
         setIaDebugMsg("");
         setScRawHtml(null);
         setShowRawModal(false);
+        // Auto-load: use diary number (SC website, free) or CNR (eCourts API)
+        const hasDiary = !!(selected?.diaryNumber || selected?.diaryNo) && !!selected?.diaryYear;
+        if (hasDiary || !!selected?.cnrNumber) {
+            setTimeout(() => fetchIAData(false), 0);
+        }
     }, [selected?.id]);
 
     // "Fetch All" trigger — SC sources only (no eCourts API credits)
@@ -3765,16 +3730,38 @@ export function LastOrdersSection({ selected, fetchTrigger = 0 }: { selected: an
         setFetchError(null);
 
 
-        // Try 1: eCourts API — get order metadata only (dates/types for display)
-        // Do NOT return early — always fall through to Try 2 for PDF links
-        // (eCourts order-document endpoint returns binary PDF which our backend can't forward as iframe)
+        // Try 1: eCourts API — get judgmentOrders list and build PDF links via /ecourts-pdf proxy
         if (selected?.cnrNumber) {
             const data = await fetchWithTimeout(() => fetchLastOrders(selected.cnrNumber), 8000);
             if (data) {
                 const arr = Array.isArray(data) ? data : [data];
                 setOrderData(arr);
                 setDataSource('api');
-                // Don't set orderLinks here — SC website (Try 2) gives direct viewable PDF links
+                console.log('[LastOrders] judgmentOrders from API:', arr); // debug: check field names
+
+                // Build PDF links using /ecourts-pdf proxy (handles binary PDF responses)
+                // eCourts judgmentOrders items carry a filename field — try common field names
+                const links = arr
+                    .map((o: any, i: number) => {
+                        const filename = o.filename || o.orderFileName || o.orderFilename
+                            || o.documentFileName || o.file_name || o.orderNo || '';
+                        if (!filename) return null;
+                        const proxyUrl = `/ecourts-pdf/api/partner/case/${selected.cnrNumber}/order/${filename}`;
+                        const rawDate = o.orderDate || o.date || o.judgmentDate || `Order ${i + 1}`;
+                        const orderType = o.orderType || o.type || o.orderCategory
+                            || (String(filename).toLowerCase().includes('rop') ? 'ROP' : 'Order');
+                        return { date: rawDate, label: orderType, url: proxyUrl, proxyUrl };
+                    })
+                    .filter((l): l is { date: string; label: string; url: string; proxyUrl: string } => l !== null);
+
+                if (links.length > 0) {
+                    setOrderLinks(links);
+                    setActivePdf(links[0].proxyUrl);
+                    setFetched(true);
+                    loadingRef.current = false;
+                    setLoading(false);
+                    return; // PDF links found — skip SC website fallback
+                }
             }
         }
 
@@ -3872,10 +3859,10 @@ export function LastOrdersSection({ selected, fetchTrigger = 0 }: { selected: an
         setLoading(false);
         setShowOrdersModal(false);
 
-        // Auto-load if diary number available (SC website fetch, free) or eCourts cached
+        // Auto-load if diary number available, eCourts cached, or any CNR
         const hasDiary = !!(diaryNo && diaryYear);
         const hasCached = selected?.cnrNumber ? isCached('lastOrders', selected.cnrNumber) : false;
-        if (hasDiary || hasCached) {
+        if (hasDiary || hasCached || !!selected?.cnrNumber) {
             loadLastOrders();
         }
     }, [selected?.id]);
@@ -3909,13 +3896,16 @@ export function LastOrdersSection({ selected, fetchTrigger = 0 }: { selected: an
     let displayPetitionerAdvocate = advToStr(selected.petitionerAdvocates);
     let displayRespondentAdvocate = advToStr(selected.respondentAdvocates);
 
-    // Override with API data if we got it
+    // Override with API data if we got it (orderData may be an array)
     if (dataSource === 'api' && orderData) {
-        displayOrderDate = orderData.orderDate || orderData.order_date || orderData.date || displayOrderDate;
-        displayJudges = orderData.judges || orderData.coram || displayJudges;
-        displayIANumbers = orderData.iaNumbers || orderData.ia_numbers || displayIANumbers;
-        displayPetitionerAdvocate = orderData.petitionerAdvocate || orderData.petitioner_advocate || displayPetitionerAdvocate;
-        displayRespondentAdvocate = orderData.respondentAdvocate || orderData.respondent_advocate || displayRespondentAdvocate;
+        const firstOrder = Array.isArray(orderData) ? orderData[0] : orderData;
+        if (firstOrder) {
+            displayOrderDate = firstOrder.orderDate || firstOrder.order_date || firstOrder.date || displayOrderDate;
+            displayJudges = firstOrder.judges || firstOrder.coram || displayJudges;
+            displayIANumbers = firstOrder.iaNumbers || firstOrder.ia_numbers || displayIANumbers;
+            displayPetitionerAdvocate = firstOrder.petitionerAdvocate || firstOrder.petitioner_advocate || displayPetitionerAdvocate;
+            displayRespondentAdvocate = firstOrder.respondentAdvocate || firstOrder.respondent_advocate || displayRespondentAdvocate;
+        }
     }
 
     // Format advocates (strip "1 " prefix and title case)
@@ -4037,6 +4027,31 @@ export function LastOrdersSection({ selected, fetchTrigger = 0 }: { selected: an
                     )}
                 </div>
             </div>
+
+            {/* All orders from eCourts API when no SC website links */}
+            {!orderLinks.length && Array.isArray(orderData) && orderData.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: T.textMuted, letterSpacing: 0.8, marginBottom: 8, textTransform: 'uppercase' }}>
+                        Orders from eCourts ({orderData.length})
+                    </div>
+                    {orderData.map((order: any, idx: number) => {
+                        const oDate = order.orderDate || order.order_date || order.date || '';
+                        const oJudges: string[] = order.judges || order.coram || [];
+                        const oType = order.orderType || order.type || order.purposeOfHearing || order.purpose || '';
+                        return (
+                            <div key={idx} style={{ background: T.surface, borderRadius: 9, border: `1px solid ${T.borderSoft}`, padding: '10px 14px', marginBottom: 8 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: oJudges.length || oType ? 6 : 0 }}>
+                                    <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{oDate ? formatDateForDisplay(oDate) : `Order ${idx + 1}`}</div>
+                                    {oType && <span style={{ fontSize: 11, fontWeight: 600, background: '#EFF6FF', color: '#1E40AF', padding: '2px 7px', borderRadius: 4 }}>{oType}</span>}
+                                </div>
+                                {Array.isArray(oJudges) && oJudges.length > 0 && (
+                                    <div style={{ fontSize: 12, color: T.textMuted }}>{oJudges.join(' · ')}</div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             {hasLocalData ? (
                 <div style={{ background: T.surface, borderRadius: 9, border: `1px solid ${T.borderSoft}`, padding: "14px" }}>

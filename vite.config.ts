@@ -23,6 +23,12 @@ export default defineConfig(() => {
         secure: false,
         // no rewrite — backend expects /ecourts-api/* and strips it internally
       },
+      // eCourts binary PDF proxy — serves order PDFs with correct content-type for <iframe>
+      '/ecourts-pdf': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
       // SC office report + cause list — avoids CORS when fetching from api.sci.gov.in
       '/sci-report': {
         target: 'https://api.sci.gov.in',

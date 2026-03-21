@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Search, FileText, AlertCircle, Loader2 } from 'lucide-react';
-import axios from 'axios';
-import { ApiCaseResponse } from '../../types';
+import { fetchCaseFullByCNR } from '../../services/eCourtsService';
+import { transformMCPToCase } from '../../utils/apiTransform';
 
 interface SCLookupProps {
-  onCaseFound: (apiResponse: ApiCaseResponse) => void;
+  onCaseFound: (caseData: any) => void;
 }
 
 export const SCLookup: React.FC<SCLookupProps> = ({ onCaseFound }) => {
@@ -14,8 +14,22 @@ export const SCLookup: React.FC<SCLookupProps> = ({ onCaseFound }) => {
   const [error, setError] = useState<string | null>(null);
 
   const handleLookup = async () => {
-    if (!diaryNumber.trim()) {
-      setError('Please enter a diary number');
+    const input = diaryNumber.trim();
+    if (!input) {
+      setError('Please enter a diary number or CNR number.');
+      return;
+    }
+
+    // Auto-detect input type:
+    // - Numeric (e.g. 542) → diary number → derive CNR: SCIN01 + padded to 6 digits + year
+    // - Starts with SCIN (e.g. SCIN010005422026) → use directly as CNR
+    let cnr: string;
+    if (/^\d+$/.test(input)) {
+      cnr = `SCIN01${input.padStart(6, '0')}${diaryYear}`;
+    } else if (/^SCIN/i.test(input)) {
+      cnr = input.toUpperCase();
+    } else {
+      setError('Enter a diary number (e.g., 542) or a CNR number (e.g., SCIN010005422026).');
       return;
     }
 
@@ -23,39 +37,17 @@ export const SCLookup: React.FC<SCLookupProps> = ({ onCaseFound }) => {
     setError(null);
 
     try {
-      const response = await axios.get<ApiCaseResponse>(
-        '/api/case',
-        // Relative URL → Vite proxy forwards to https://lex-t.vercel.app
-        // Fixes CORS errors on VS Code dev tunnels (devtunnels.ms)
-        {
-          params: {
-            diary_no: diaryNumber,
-            diary_year: diaryYear,
-            language: 'en'
-          }
-        }
-      );
-
-      if (response.data.ok) {
-        onCaseFound(response.data);
+      const data = await fetchCaseFullByCNR(cnr);
+      if (data) {
+        const caseData = transformMCPToCase(data, cnr);
+        onCaseFound(caseData);
         setDiaryNumber('');
       } else {
-        setError('Case not found. Please check the diary number and year.');
+        setError('Case not found. Please verify the diary number and year.');
       }
     } catch (err) {
       console.error('Error fetching case:', err);
-
-      if (axios.isAxiosError(err)) {
-        if (err.response) {
-          setError(`API Error: ${err.response.status} ${err.response.statusText}`);
-        } else if (err.request) {
-          setError('Failed to fetch case data. Please ensure the API server is running on localhost:8080.');
-        } else {
-          setError(err.message);
-        }
-      } else {
-        setError('An unexpected error occurred. Please try again.');
-      }
+      setError('An unexpected error occurred. Please try again.');
     } finally {
       setIsSearching(false);
     }
@@ -72,13 +64,13 @@ export const SCLookup: React.FC<SCLookupProps> = ({ onCaseFound }) => {
             Supreme Court Case Lookup
           </h3>
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Enter the diary number and year to fetch case details from the Supreme Court database.
+            Enter a diary number (e.g., 542) with the year, or paste a full CNR number (e.g., SCIN010005422026).
           </p>
 
           <div className="flex space-x-3">
             <input
               type="text"
-              placeholder="Diary Number (e.g., 1234)"
+              placeholder="Diary No. (e.g., 542) or CNR (SCIN…)"
               value={diaryNumber}
               onChange={(e) => {
                 setDiaryNumber(e.target.value);
@@ -127,7 +119,7 @@ export const SCLookup: React.FC<SCLookupProps> = ({ onCaseFound }) => {
           <div className="mt-3 flex items-start space-x-2 text-xs text-blue-600 dark:text-blue-400">
             <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
             <p>
-              Fetching case data from Supreme Court API. Make sure the API server is running on localhost:8080.
+              Diary number is automatically converted to CNR for lookup. Both formats are supported.
             </p>
           </div>
         </div>
