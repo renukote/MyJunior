@@ -355,17 +355,18 @@ export default function CourtSync() {
             });
             if (exists !== -1) {
                 const existing = prev[exists];
-                const mergedListings = [...(existing.listings || [])];
-                if (caseData.listings?.length > 0) {
-                    const newApiListing = caseData.listings[0];
-                    if (!mergedListings.find(l => l.date === newApiListing.date)) {
-                        mergedListings.unshift(newApiListing);
-                        mergedListings.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                // Merge ALL listings from fresh API data (not just the first one)
+                const existingListings = [...(existing.listings || [])];
+                const newListings = Array.isArray(caseData.listings) ? caseData.listings : [];
+                newListings.forEach((nl: any) => {
+                    if (nl.date && !existingListings.find((l: any) => l.date === nl.date)) {
+                        existingListings.push(nl);
                     }
-                }
-                const merged = { ...existing, ...caseData, id: existing.id, timeline: existing.timeline, tasks: existing.tasks, notes: existing.notes, documents: existing.documents, applications: existing.applications, listings: mergedListings };
+                });
+                existingListings.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                const merged = { ...existing, ...caseData, id: existing.id, timeline: existing.timeline, tasks: existing.tasks, notes: existing.notes, documents: existing.documents, applications: existing.applications, listings: existingListings };
                 const n = [...prev]; n[exists] = merged;
-                setSuccessToast(`Case ${caseData.caseNumber} updated from SC Database.`); return n;
+                setSuccessToast(`Case ${caseData.caseNumber || caseData.diaryNumber} updated from SC Database.`); return n;
             }
             setSuccessToast(`Case ${caseData.caseNumber} added successfully.`);
             return [caseData, ...prev];
@@ -373,13 +374,13 @@ export default function CourtSync() {
         setSelected((prev: any) => {
             if (!prev) return caseData;
             const mergedListings = [...(prev.listings || [])];
-            if (caseData.listings?.length > 0) {
-                const newApiListing = caseData.listings[0];
-                if (!mergedListings.find((l: any) => l.date === newApiListing.date)) {
-                    mergedListings.unshift(newApiListing);
-                    mergedListings.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            const newListings = Array.isArray(caseData.listings) ? caseData.listings : [];
+            newListings.forEach((nl: any) => {
+                if (nl.date && !mergedListings.find((l: any) => l.date === nl.date)) {
+                    mergedListings.push(nl);
                 }
-            }
+            });
+            mergedListings.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
             return { ...prev, ...caseData, id: prev.id, timeline: prev.timeline, tasks: prev.tasks, notes: prev.notes, documents: prev.documents, applications: prev.applications, listings: mergedListings };
         });
         setStatusFilter("All Cases"); setShowArchived(false);

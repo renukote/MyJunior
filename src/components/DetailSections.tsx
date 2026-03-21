@@ -259,8 +259,8 @@ Source: ${parsed.nextListingSource}
                 </div>
             )}
 
-            {/* Snapshot Button — show whenever there is a last listed date OR any listings */}
-            {(!!parsed.lastListedDate || listings.length > 0 || !!selected.lastListedOn) && (
+            {/* Snapshot Button — show whenever there is any listing/hearing data */}
+            {(!!parsed.lastListedDate || listings.length > 0 || !!selected.lastListedOn || !!selected.nextHearingDate || !!selected.likelyListedOn) && (
                 <button
                     onClick={() => setShowSnapshot(true)}
                     style={{
@@ -377,7 +377,46 @@ Source: ${parsed.nextListingSource}
                                 </div>
                             ))}
 
-                            {!parsed.lastListedDate && listings.length === 0 && (
+                            {/* Scheduled / Next Hearing Card — shown when no past hearing but future date exists */}
+                            {!parsed.lastListedDate && listings.length === 0 && (selected.nextHearingDate || selected.likelyListedOn) && (() => {
+                                const schedDate = selected.nextHearingDate || selected.likelyListedOn;
+                                const schedFormatted = formatDateForDisplay(schedDate) || schedDate;
+                                const today = new Date(); today.setHours(0,0,0,0);
+                                const nd = new Date(schedDate); nd.setHours(0,0,0,0);
+                                const isFuture = nd >= today;
+                                const daysLeft = Math.round((nd.getTime() - today.getTime()) / 86400000);
+                                return (
+                                    <div style={{ background: isFuture ? "#F0FDF4" : T.surface, borderRadius: 10, border: `1px solid ${isFuture ? "#86EFAC" : T.borderSoft}`, padding: "14px 16px", marginBottom: 12 }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                                            <div style={{ fontSize: 16, fontWeight: 800, color: isFuture ? "#15803D" : T.text }}>{schedFormatted}</div>
+                                            <span style={{ fontSize: 10, fontWeight: 700, background: isFuture ? "#DCFCE7" : "#F3F4F6", color: isFuture ? "#15803D" : "#6B7280", padding: "2px 8px", borderRadius: 4 }}>
+                                                {isFuture ? (daysLeft === 0 ? "TODAY" : `IN ${daysLeft}D`) : "PASSED"}
+                                            </span>
+                                        </div>
+                                        <div style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" }}>
+                                            <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, width: 100, flexShrink: 0, letterSpacing: 0.5 }}>STATUS</div>
+                                            <div style={{ fontSize: 13, color: T.text, flex: 1 }}>{selected.status || "Pending"}</div>
+                                        </div>
+                                        {selected.stage && (
+                                            <div style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" }}>
+                                                <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, width: 100, flexShrink: 0, letterSpacing: 0.5 }}>STAGE</div>
+                                                <div style={{ fontSize: 13, color: T.text, flex: 1 }}>{selected.stage}</div>
+                                            </div>
+                                        )}
+                                        {selected.courtNumber && (
+                                            <div style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" }}>
+                                                <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, width: 100, flexShrink: 0, letterSpacing: 0.5 }}>COURT NO.</div>
+                                                <div style={{ fontSize: 13, color: T.text, flex: 1 }}>{selected.courtNumber}</div>
+                                            </div>
+                                        )}
+                                        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                                            <span style={{ fontSize: 10, fontWeight: 700, background: "#EFF6FF", color: "#1E40AF", padding: "2px 8px", borderRadius: 4 }}>SCHEDULED</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {!parsed.lastListedDate && listings.length === 0 && !selected.nextHearingDate && !selected.likelyListedOn && (
                                 <div style={{ padding: "20px", textAlign: "center", color: T.textMuted, fontSize: 13, background: T.surface, borderRadius: 9, border: `1px solid ${T.border}` }}>
                                     No listing data available yet
                                 </div>
