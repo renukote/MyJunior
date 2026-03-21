@@ -12,6 +12,7 @@ import {
   searchCases,
 } from "../services/eCourtsService";
 import { transformMCPToCase } from "../utils/apiTransform";
+import { getDemoSearchCount, getDemoSearchLimit, incrementDemoSearchCount } from "./Login";
 
 interface SearchCaseFormProps {
     onCaseFound: (caseData: any) => void;
@@ -526,6 +527,22 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
     };
 
     const handleSearch = async () => {
+        // ── Demo account search limit check ───────────────────────────────────
+        try {
+            const userRaw = localStorage.getItem('lextgress_user');
+            if (userRaw) {
+                const user = JSON.parse(userRaw);
+                const limit = getDemoSearchLimit(user.email);
+                if (limit !== null) {
+                    const used = getDemoSearchCount(user.email);
+                    if (used >= limit) {
+                        setError(`Trial limit reached (${used}/${limit} searches used). Please contact us to upgrade your account.`);
+                        return;
+                    }
+                }
+            }
+        } catch { /* ignore */ }
+
         const input = diaryNumber.trim();
         if (!input) {
             setError("Please enter a diary number or CNR number.");
@@ -572,6 +589,17 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
             }
 
             onCaseFound(caseData);
+
+            // Increment demo search counter if applicable
+            try {
+                const userRaw = localStorage.getItem('lextgress_user');
+                if (userRaw) {
+                    const user = JSON.parse(userRaw);
+                    if (getDemoSearchLimit(user.email) !== null) {
+                        incrementDemoSearchCount(user.email);
+                    }
+                }
+            } catch { /* ignore */ }
 
             // Part 6 — persist diary search history
             saveSearchHistory(input, year);
@@ -756,6 +784,25 @@ export default function SearchCaseForm({ onCaseFound, onError, theme: T, onViewD
                                     <>🔍 Lookup</>
                                 )}
                             </button>
+
+                            {/* Demo search counter badge */}
+                            {(() => {
+                                try {
+                                    const userRaw = localStorage.getItem('lextgress_user');
+                                    if (!userRaw) return null;
+                                    const user = JSON.parse(userRaw);
+                                    const limit = getDemoSearchLimit(user.email);
+                                    if (limit === null) return null;
+                                    const used = getDemoSearchCount(user.email);
+                                    const remaining = limit - used;
+                                    const isLow = remaining <= 10;
+                                    return (
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: isLow ? "#C62828" : "#6B7280", background: isLow ? "#FEF2F2" : "#F3F4F6", border: `1px solid ${isLow ? "#FECACA" : "#E5E7EB"}`, borderRadius: 6, padding: "4px 10px", whiteSpace: "nowrap", alignSelf: "center" }}>
+                                            {remaining > 0 ? `${used}/${limit} searches used` : `⛔ Limit reached (${limit}/${limit})`}
+                                        </div>
+                                    );
+                                } catch { return null; }
+                            })()}
 
                             <button
                                 onClick={() => setShowScanner(true)}

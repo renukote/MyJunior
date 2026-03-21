@@ -158,6 +158,12 @@ export function CaseCard({ c, selected, onClick, searchTerm }: { c: any; selecte
                         <span style={{ color: T.accentDark, fontSize: 13, fontWeight: 700, fontFamily: "Georgia,serif", letterSpacing: 0.3 }}>{hi(c.caseNumber)}</span>
                         {c.archived && <span style={{ fontSize: 11, color: T.textMuted, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>ARCHIVED</span>}
                     </div>
+                    {(c.registrationDate || c.verificationDate) && (
+                        <div style={{ display: "flex", gap: 10, marginLeft: 15, marginBottom: 4, flexWrap: "wrap" }}>
+                            {c.registrationDate && <span style={{ fontSize: 11, color: T.textMuted }}>📋 Registered: {safeDate(c.registrationDate)}</span>}
+                            {c.verificationDate && <span style={{ fontSize: 11, color: T.textMuted }}>✅ Verified: {safeDate(c.verificationDate)}</span>}
+                        </div>
+                    )}
                     <div style={{ color: T.text, fontSize: 15.5, marginLeft: 15, marginBottom: 7, lineHeight: 1.45 }}>
                         <span style={{ fontWeight: 600 }}>{formatCaseTitleShort(c)}</span>
                     </div>

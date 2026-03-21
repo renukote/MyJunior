@@ -82,44 +82,61 @@ export function transformMCPToCase(
     const yearFromCnr  = cnrMatch ? cnrMatch[2] : '';
 
     // Extract hearings array from whichever field the API uses
-    const hearingsArr: any[] = Array.isArray(d.hearings) ? d.hearings
+    // Debug confirmed: eCourts partner API uses 'historyOfCaseHearings' (past) and 'listingDates' (scheduled)
+    const historyArr: any[] = Array.isArray(d.historyOfCaseHearings) ? d.historyOfCaseHearings
+        : Array.isArray(d.hearings) ? d.hearings
         : Array.isArray(d.hearingHistory) ? d.hearingHistory
-        : Array.isArray(d.caseHearings) ? d.caseHearings
-        : Array.isArray(d.listingDates) ? d.listingDates : [];
+        : Array.isArray(d.caseHearings) ? d.caseHearings : [];
+
+    // Merge scheduled listing dates (future) with hearing history (past)
+    const scheduledArr: any[] = Array.isArray(d.listingDates) ? d.listingDates : [];
+    const hearingsArr: any[] = [...historyArr, ...scheduledArr];
+
+    // Helper: extract date from any hearing record — covers all known eCourts field names
+    const getHearingDate = (h: any): string =>
+        h.businessDate || h.hearingDate || h.date || h.caseHearingDate || h.clDate
+        || h.nextDate || h.listingDate || h.scheduledDate || '';
 
     // Extract latest hearing date from arrays if top-level field is missing
     const latestHearingDate = (() => {
-        if (hearingsArr.length === 0) return null;
-        const sorted = hearingsArr.slice().sort((a: any, b: any) => {
-            const da = a.hearingDate || a.date || a.caseHearingDate || a.clDate || '';
-            const db = b.hearingDate || b.date || b.caseHearingDate || b.clDate || '';
+        if (historyArr.length === 0) return null;
+        const sorted = historyArr.slice().sort((a: any, b: any) => {
+            const da = getHearingDate(a);
+            const db = getHearingDate(b);
             return da > db ? -1 : 1;
         });
-        return sorted[0]?.hearingDate || sorted[0]?.date || sorted[0]?.caseHearingDate || sorted[0]?.clDate || null;
+        return getHearingDate(sorted[0]) || null;
     })();
+
+    // Helper: normalize date to YYYY-MM-DD
+    const toISO = (raw: string): string => {
+        if (!raw) return '';
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+        const dmy = raw.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+        return raw;
+    };
 
     // Map hearings to the listings format used by ListingsSection
     const listingsFromAPI = hearingsArr.map((h: any, i: number) => {
-        const rawDate = h.hearingDate || h.date || h.caseHearingDate || h.clDate || '';
-        // Normalize date to YYYY-MM-DD if it's DD-MM-YYYY
-        let isoDate = rawDate;
-        const dmyMatch = rawDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-        if (dmyMatch) isoDate = `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+        const rawDate = getHearingDate(h);
+        const isoDate = toISO(rawDate);
 
         const judgesRaw = Array.isArray(h.judges) ? h.judges.join(', ')
             : Array.isArray(h.coram) ? h.coram.join(', ')
             : (h.judge || h.judgeNames || h.bench || '');
 
-        const purpose = h.purpose || h.purposeOfHearing || h.stage || h.type || '';
-        const miscRegular = h.miscRegular || h.listType || (purpose.toLowerCase().includes('misc') ? 'Misc.' : 'Regular');
+        const purpose = h.purpose || h.purposeOfHearing || h.causeOfHearing
+            || h.stage || h.type || h.listType || '';
+        const miscRegular = h.miscRegular || (purpose.toLowerCase().includes('misc') ? 'Misc.' : 'Regular');
 
         return {
             id: `l_api_${i}_${Date.now()}`,
             date: isoDate,
             type: purpose || 'Listed',
             bench: judgesRaw,
-            court: h.courtNumber || h.court || h.proposedList || '',
-            item: h.itemNo || h.item || h.clItemNo || '',
+            court: h.courtNumber || h.court || h.proposedList || h.courtNo || '',
+            item: h.itemNo || h.item || h.clItemNo || h.srNo || '',
             notes: `${miscRegular}${purpose ? ' · ' + purpose : ''} — synced from eCourts API`,
         };
     }).filter((l: any) => l.date);
@@ -157,16 +174,31 @@ export function transformMCPToCase(
         petitioners: petitionersArr,
         respondents: respondentsArr,
         parties: petitionersArr.concat(respondentsArr).join(' vs ') || '',
-        caseType: d.caseType || d.case_type || '',
-        shortCaseNumber: d.caseNumber || d.case_number || '',
-        caseNumber: d.caseNumber || d.case_number || '',
-        diaryNumber: diaryFromCnr || d.diaryNo || d.diary_no || '',
-        diaryYear: yearFromCnr || (d.filingDate ? String(d.filingDate).slice(0, 4) : ''),
+        caseType: (d.caseType && d.caseType !== 'UNKNOWN') ? d.caseType : (d.case_type || ''),
+        shortCaseNumber: (() => {
+            // Short form: used in card badge as "{caseType} {shortCaseNumber}"
+            // e.g. shortCaseNumber = "009219/2025" → badge shows "SLP(C) 009219/2025"
+            const regNo = d.registrationNumber || d.registration_number || '';
+            const regYear = d.cnrYear || yearFromCnr || '';
+            if (regNo && regYear) return `${regNo}/${regYear}`;
+            return d.caseNumber || d.case_number || d.caseNo || d.case_no || '';
+        })(),
+        caseNumber: (() => {
+            // Full form: shown in Case Information panel
+            // e.g. "SLP(C) No. 009219/2025" or "No. 009219/2025" when type unknown
+            const regNo = d.registrationNumber || d.registration_number || '';
+            const regYear = d.cnrYear || yearFromCnr || '';
+            const caseT = (d.caseType && d.caseType !== 'UNKNOWN') ? d.caseType : '';
+            if (regNo && regYear) return caseT ? `${caseT} No. ${regNo}/${regYear}` : `No. ${regNo}/${regYear}`;
+            return d.caseNumber || d.case_number || d.caseNo || d.case_no || '';
+        })(),
+        diaryNumber: diaryFromCnr || d.filingNumber || d.diaryNo || d.diary_no || '',
+        diaryYear: yearFromCnr || d.cnrYear || (d.filingDate ? String(d.filingDate).slice(0, 4) : ''),
         cnrNumber: theCnr,
         status,
-        nextHearingDate: d.nextHearingDate || d.next_hearing_date || d.nextDate || d.next_date || null,
-        lastListedOn: d.lastHearingDate || d.lastListedOn || d.last_listed_on || d.lastHearing || d.lastDate || d.last_date || d.latestHearingDate || latestHearingDate || latestOrderDate || null,
-        likelyListedOn: d.likelyListedOn || d.tentativeDate || null,
+        nextHearingDate: toISO(d.nextHearingDate || d.next_hearing_date || d.nextDate || d.next_date || '') || null,
+        lastListedOn: toISO(d.lastHearingDate || d.lastListedOn || d.last_listed_on || d.lastHearing || d.lastDate || d.last_date || d.latestHearingDate || latestHearingDate || latestOrderDate || '') || null,
+        likelyListedOn: toISO(d.likelyListedOn || d.tentativeDate || '') || null,
         advanceList: { published: false, date: null, presentInList: false },
         finalList: { published: false, date: null, presentInList: false },
         lastCheckedAt: now,
@@ -177,6 +209,8 @@ export function transformMCPToCase(
         courtNumber: d.courtNumber || d.court_number || 'Court No. 1',
         timeOfSitting: d.timeOfSitting || '10:30 AM',
         dateOfFiling: d.filingDate || d.filed || d.date_of_filing || d.dateOfFiling || now.split('T')[0],
+        registrationDate: d.registrationDate || d.caseRegistrationDate || d.registeredOn || d.case_registered_on || null,
+        verificationDate: d.verificationDate || d.caseVerificationDate || d.verifiedOn || d.case_verified_on || null,
         earlierCourtDetails: '—',
         officeReportUrl: '',
         lastOrdersUrl: '',

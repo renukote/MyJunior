@@ -773,7 +773,9 @@ export default function CourtSync() {
                                     <DR icon="👥" label="Respondent(s)">{formatParty(selected.respondent)}</DR>
                                     <DR icon="#" label="D.No">{selected.diaryNumber} / {selected.diaryYear}</DR>
                                     <DR icon="🔖" label="CNR">{selected.cnrNumber || "—"}</DR>
-                                    <DR icon="📋" label="Case No.">{selected.caseNumber}</DR>
+                                    <DR icon="📋" label="Case No.">{selected.caseNumber || "—"}</DR>
+                                    {selected.registrationDate && <DR icon="📋" label="Registered On">{fmtDate(selected.registrationDate)}</DR>}
+                                    {selected.verificationDate && <DR icon="✅" label="Verified On">{fmtDate(selected.verificationDate)}</DR>}
                                     <DR icon="⚖" label="Court">{selected.courtName}</DR>
                                     <DR icon="🏛" label="Court No.">{selected.courtNumber}</DR>
                                     <DR icon="🕐" label="Time">{selected.timeOfSitting}</DR>
@@ -1113,7 +1115,9 @@ export default function CourtSync() {
                                                     <DR icon="👥" label="Respondent(s)">{formatParty(selected.respondent)}</DR>
                                                     <DR icon="#" label="D.No">{selected.diaryNumber} / {selected.diaryYear}</DR>
                                                     <DR icon="🔖" label="CNR Number">{selected.cnrNumber || "—"}</DR>
-                                                    {selected.caseNumber && <DR icon="📋" label="Case Number">{selected.caseNumber}</DR>}
+                                                    <DR icon="📋" label="Case Number">{selected.caseNumber || "—"}</DR>
+                                                    {selected.registrationDate && <DR icon="📋" label="Registered On">{fmtDate(selected.registrationDate)}</DR>}
+                                                    {selected.verificationDate && <DR icon="✅" label="Verified On">{fmtDate(selected.verificationDate)}</DR>}
                                                     <DR icon="⚖" label="Court Name">{selected.courtName}</DR>
                                                     <DR icon="🏛" label="Court Number">{selected.courtNumber}</DR>
                                                     <DR icon="🕐" label="Time of Sitting">{selected.timeOfSitting}</DR>

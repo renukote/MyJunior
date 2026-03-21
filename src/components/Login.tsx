@@ -2,25 +2,38 @@ import React, { useState } from 'react';
 import { Eye, EyeOff, Scale } from 'lucide-react';
 
 const USERS = [
-  {
-    email: 'admin@lextgress.com',
-    password: 'LexTgress@2026',
-    name: 'Admin',
-    role: 'Advocate'
-  },
-  {
-    email: 'paari@lextgress.com',
-    password: 'Paari@2026',
-    name: 'Paari Vendhan',
-    role: 'Advocate'
-  },
-  {
-    email: 'demo@lextgress.com',
-    password: 'Demo@2026',
-    name: 'Demo User',
-    role: 'Advocate'
-  }
+  { email: 'admin@lextgress.com',   password: 'LexTgress@2026', name: 'Admin',          role: 'Advocate' },
+  { email: 'paari@lextgress.com',   password: 'Paari@2026',     name: 'Paari Vendhan',  role: 'Advocate' },
+  { email: 'demo@lextgress.com',    password: 'Demo@2026',      name: 'Demo User',      role: 'Advocate' },
+  // ── Demo trial accounts (50 case search limit each) ─────────────────────────
+  { email: 'demo1@lextgress.com',   password: 'Demo@123', name: 'Demo User 1',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo2@lextgress.com',   password: 'Demo@123', name: 'Demo User 2',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo3@lextgress.com',   password: 'Demo@123', name: 'Demo User 3',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo4@lextgress.com',   password: 'Demo@123', name: 'Demo User 4',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo5@lextgress.com',   password: 'Demo@123', name: 'Demo User 5',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo6@lextgress.com',   password: 'Demo@123', name: 'Demo User 6',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo7@lextgress.com',   password: 'Demo@123', name: 'Demo User 7',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo8@lextgress.com',   password: 'Demo@123', name: 'Demo User 8',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo9@lextgress.com',   password: 'Demo@123', name: 'Demo User 9',  role: 'Advocate', searchLimit: 50 },
+  { email: 'demo10@lextgress.com',  password: 'Demo@123', name: 'Demo User 10', role: 'Advocate', searchLimit: 50 },
 ];
+
+// ── Demo account search limit helpers (used by SearchCaseForm) ────────────────
+export const SEARCH_LIMIT_KEY = (email: string) => `lx_search_count_${email}`;
+
+export function getDemoSearchCount(email: string): number {
+  return parseInt(localStorage.getItem(SEARCH_LIMIT_KEY(email)) || '0', 10);
+}
+
+export function incrementDemoSearchCount(email: string): void {
+  const count = getDemoSearchCount(email);
+  localStorage.setItem(SEARCH_LIMIT_KEY(email), String(count + 1));
+}
+
+export function getDemoSearchLimit(email: string): number | null {
+  const user = USERS.find(u => u.email === email);
+  return (user as any)?.searchLimit ?? null;  // null = unlimited
+}
 
 interface LoginProps {
   onLogin: () => void;
@@ -45,6 +58,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           email: user.email,
           name: user.name,
           role: user.role,
+          searchLimit: (user as any).searchLimit ?? null,
           logged_in_at: new Date().toISOString()
         })
       );

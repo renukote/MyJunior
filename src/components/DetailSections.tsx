@@ -173,9 +173,10 @@ Source: ${parsed.nextListingSource}
             onAdd={() => setShowForm(s => !s)} 
             addLabel={showForm ? "✕ Cancel" : "+ Add Listing"}
         >
-            {/* COMPACT SINGLE CARD */}
+            {/* COMPACT SINGLE CARD — Last Listing */}
             {parsed.lastListedDate && (
                 <div style={{ background: T.surface, borderRadius: 9, border: `1px solid ${T.borderSoft}`, padding: "12px 14px", marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, letterSpacing: 0.7, marginBottom: 6, textTransform: "uppercase" }}>Last Listing</div>
                     {/* Line 1: Date (bold) + Badge (inline right) */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <div style={{ fontSize: 17, fontWeight: 800, color: T.text }}>
@@ -209,8 +210,57 @@ Source: ${parsed.nextListingSource}
                 </div>
             )}
 
-            {/* Snapshot Button — visible whenever any listing data exists */}
-            {(parsed.lastListedDate || listings.length > 0) && (
+            {/* NEXT HEARING CARD — shown for pending/fresh cases with a scheduled date */}
+            {!parsed.lastListedDate && (selected.nextHearingDate || selected.likelyListedOn) && (() => {
+                const nextDate = selected.nextHearingDate || selected.likelyListedOn;
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                const nd = new Date(nextDate); nd.setHours(0, 0, 0, 0);
+                const isFuture = nd >= today;
+                const daysLeft = Math.round((nd.getTime() - today.getTime()) / 86400000);
+                return (
+                    <div style={{ background: isFuture ? "#F0FDF4" : T.surface, borderRadius: 9, border: `1px solid ${isFuture ? "#86EFAC" : T.borderSoft}`, padding: "12px 14px", marginBottom: 12 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: isFuture ? "#15803D" : T.textMuted, letterSpacing: 0.7, marginBottom: 6, textTransform: "uppercase" }}>
+                            {isFuture ? "Scheduled / Next Hearing" : "Last Scheduled Date"}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ fontSize: 17, fontWeight: 800, color: isFuture ? "#15803D" : T.text }}>
+                                {formatDateForDisplay(nextDate) || nextDate}
+                            </div>
+                            <div style={{ background: isFuture ? "#DCFCE7" : "#F3F4F6", color: isFuture ? "#15803D" : "#6B7280", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
+                                {isFuture ? (daysLeft === 0 ? "TODAY" : `IN ${daysLeft}D`) : "PASSED"}
+                            </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: T.textMuted, marginTop: 4 }}>
+                            {parsed.statusBadge} · {selected.stage || "Pending hearing"}
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* LISTING HISTORY from eCourts API — shown directly for pending cases too */}
+            {listings.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, letterSpacing: 0.7, marginBottom: 8, textTransform: "uppercase" }}>Hearing History ({listings.length})</div>
+                    {listings.slice(0, 5).map((l: any) => (
+                        <div key={l.id} style={{ background: T.surface, borderRadius: 8, border: `1px solid ${T.borderSoft}`, padding: "10px 12px", marginBottom: 8 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: l.bench || l.type ? 5 : 0 }}>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{formatDateForDisplay(l.date) || l.date}</div>
+                                {l.type && <span style={{ fontSize: 10, fontWeight: 700, background: "#EFF6FF", color: "#1E40AF", padding: "2px 7px", borderRadius: 4 }}>{l.type.slice(0, 20)}</span>}
+                            </div>
+                            {l.bench && <div style={{ fontSize: 12, color: T.textMuted }}>{l.bench}</div>}
+                            {l.notes && <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{l.notes.replace(' — synced from eCourts API', '')}</div>}
+                        </div>
+                    ))}
+                    {listings.length > 5 && (
+                        <div style={{ fontSize: 12, color: T.textMuted, textAlign: "center", padding: "6px 0" }}>
+                            + {listings.length - 5} more — open Snapshot to see all
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Snapshot Button — show whenever there is a last listed date OR any listings */}
+            {(!!parsed.lastListedDate || listings.length > 0 || !!selected.lastListedOn) && (
                 <button
                     onClick={() => setShowSnapshot(true)}
                     style={{
@@ -437,13 +487,32 @@ function buildSCEvents(c: any): any[] {
         id: "__filing", type: "filing",
         date: c.dateOfFiling,
         event: "Case filed in Supreme Court",
-        sub: c.cnrNumber
-            ? `CNR: ${c.cnrNumber}`
-            : c.diaryNumber
-                ? `Diary No. ${c.diaryNumber}/${c.diaryYear} · Registered`
-                : c.caseNumber
-                    ? `Case: ${c.caseNumber}`
+        sub: c.caseNumber
+            ? `Case No: ${c.caseNumber}`
+            : c.cnrNumber
+                ? `CNR: ${c.cnrNumber}`
+                : c.diaryNumber
+                    ? `Diary No. ${c.diaryNumber}/${c.diaryYear}`
                     : `Year: ${c.diaryYear || '—'}`,
+        sub2: c.cnrNumber ? `CNR: ${c.cnrNumber}` : null,
+        source: "SC Registry", auto: true,
+    });
+
+    // 1a. Case Registered (from eCourts API — may differ from filing date)
+    if (c.registrationDate && c.registrationDate !== c.dateOfFiling) evs.push({
+        id: "__registration", type: "filing",
+        date: c.registrationDate,
+        event: "Case registered at SC Registry",
+        sub: c.caseNumber ? `Case No: ${c.caseNumber}` : (c.diaryNumber ? `Diary No. ${c.diaryNumber}/${c.diaryYear}` : null),
+        source: "SC Registry", auto: true,
+    });
+
+    // 1b. Case Verified
+    if (c.verificationDate) evs.push({
+        id: "__verification", type: "filing",
+        date: c.verificationDate,
+        event: "Case number verified by SC Registry",
+        sub: c.caseNumber ? `Case No: ${c.caseNumber}` : null,
         source: "SC Registry", auto: true,
     });
 
@@ -2879,19 +2948,6 @@ export function ApplicationsSection({ selected, onUpdate, fetchTrigger = 0 }: { 
                     // Parse Other Documents table — header contains "Document Number" or "Document Type"
                     const docsTable = tables.find(t => /document\s*number|document\s*type/i.test(t.textContent || ''));
                     if (docsTable) {
-                        const _docRows = Array.from(docsTable.querySelectorAll('tbody tr'))
-                            .map(tr => {
-                                const cells = Array.from(tr.querySelectorAll('td')).map(td => td.textContent?.trim() || '');
-                                if (cells.length < 3) return null;
-                                return {
-                                    documentNumber: cells[0],
-                                    documentType: cells[1],
-                                    filedBy: cells[2],
-                                    filingDate: cells[3] || '',
-                                    enteredBy: cells[4] || '',
-                                };
-                            })
-                            .filter(Boolean) as any[];
                         // otherDocsData visible inside "View SC Table" modal via raw HTML
                     }
 
