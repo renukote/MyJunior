@@ -1,0 +1,19 @@
+{
+      "version": 2,
+
+        "builds": [
+            { "src": "api/**/*.js", "use": "@vercel/node" },
+                { "src": "package.json", "use": "@vercel/static-build" }
+                  ],
+
+                    "rewrites": [
+                        {
+                              "source": "/ecourts-api/:path*",
+                                    "destination": "https://lex-tigress-backend.vercel.app/ecourts-api/:path*"
+                                        },
+                                            {
+                                                  "source": "/sci-wp/:path*",
+                                                        "destination": "https://www.sci.gov.in/:path*"
+                                                            }
+                                                              ]
+                                                              }
